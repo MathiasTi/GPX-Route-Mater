@@ -33,7 +33,7 @@ const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMar
           tiles: tileUrls,
           tileSize: 256,
           attribution: layerConfig.attribution,
-          maxzoom: 19
+          maxzoom: layerConfig.maxZoom || 19
         },
         'terrain': {
           type: 'raster-dem' as const,

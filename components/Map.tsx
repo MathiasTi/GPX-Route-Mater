@@ -227,6 +227,7 @@ const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTra
         <TileLayer
           attribution={layer.attribution}
           url={layer.url}
+          maxZoom={layer.maxZoom || 19}
         />
         
         {tracks.filter(t => t.visible).map(track => {
