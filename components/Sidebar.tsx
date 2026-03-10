@@ -1,0 +1,343 @@
+
+import React from 'react';
+import { GPXTrack, MapLayer } from '../types';
+import { Upload, Trash2, Combine, Eye, EyeOff, Ruler, Layers, GripVertical, Undo2, TrendingUp, TrendingDown, Box, ChevronLeft, ChevronRight, Menu, Zap } from 'lucide-react';
+import { 
+  DndContext, 
+  closestCenter, 
+  KeyboardSensor, 
+  PointerSensor, 
+  useSensor, 
+  useSensors,
+  DragEndEvent 
+} from '@dnd-kit/core';
+import { 
+  SortableContext, 
+  sortableKeyboardCoordinates, 
+  verticalListSortingStrategy,
+  useSortable 
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+
+interface TrackItemProps {
+  track: GPXTrack;
+  isMarked: boolean;
+  onMark: (id: string) => void;
+  onToggleVisibility: (id: string) => void;
+  onRemoveTrack: (id: string) => void;
+}
+
+const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, onToggleVisibility, onRemoveTrack }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: track.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : 'auto',
+  };
+
+  return (
+    <div 
+      ref={setNodeRef} 
+      style={style}
+      onClick={() => onMark(track.id)}
+      className={`group cursor-pointer bg-white border rounded-lg p-3 hover:shadow-md transition-all ${isDragging ? 'shadow-xl opacity-50 bg-slate-50' : ''} ${isMarked ? 'border-blue-500 ring-1 ring-blue-500 bg-blue-50/30' : 'border-slate-200'}`}
+    >
+      <div className="flex items-start gap-2">
+        <div {...attributes} {...listeners} onClick={(e) => e.stopPropagation()} className="drag-handle p-1 mt-0.5 hover:bg-slate-100 rounded text-slate-400 shrink-0">
+          <GripVertical className="w-4 h-4" />
+        </div>
+        
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-0.5">
+            <div className="w-3 h-3 rounded-full shrink-0 shadow-sm border border-black/10" style={{ backgroundColor: track.color }}></div>
+            <span className={`text-sm truncate ${isMarked ? 'font-bold text-blue-900' : 'font-semibold text-slate-800'}`}>{track.name}</span>
+          </div>
+          
+          <div className="flex flex-col gap-1 ml-5">
+            <div className="text-[11px] text-slate-500 flex items-center gap-2">
+              <span className={`${isMarked ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'} px-1.5 py-0.5 rounded font-mono`}>{track.distance.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} km</span>
+              <span className="text-slate-300">•</span>
+              <span>{track.points.length.toLocaleString('de-DE')} Pkt</span>
+            </div>
+            <div className="text-[10px] text-slate-400 flex items-center gap-3 font-mono">
+              <span className="flex items-center gap-0.5 text-emerald-600"><TrendingUp className="w-3 h-3" /> {Math.round(track.ascent).toLocaleString('de-DE')}m</span>
+              <span className="flex items-center gap-0.5 text-rose-600"><TrendingDown className="w-3 h-3" /> {Math.round(track.descent).toLocaleString('de-DE')}m</span>
+              <span className="text-slate-500">Max: {track.maxSlope.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</span>
+            </div>
+            {track.powerStats && (
+              <div className="text-[10px] text-amber-600 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono mt-1 pt-1 border-t border-slate-100">
+                <Zap className="w-3 h-3 shrink-0" />
+                <span title="Durchschnittliche Leistung">Ø {Math.round(track.powerStats.avgPower).toLocaleString('de-DE')}W</span>
+                <span title="Maximale Leistung">Max {Math.round(track.powerStats.maxPower).toLocaleString('de-DE')}W</span>
+                <span title="Beste 1 Minute">1m {Math.round(track.powerStats.best1m).toLocaleString('de-DE')}W</span>
+                <span title="Beste 20 Sekunden">20s {Math.round(track.powerStats.best20s).toLocaleString('de-DE')}W</span>
+              </div>
+            )}
+            {track.surfaceStats && track.surfaceStats.length > 0 && (
+              <div className="text-[10px] text-slate-500 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-mono mt-1 pt-1 border-t border-slate-100">
+                {track.surfaceStats.map((surface, idx) => (
+                  <span key={idx} className="bg-slate-100/80 px-1.5 py-0.5 rounded border border-slate-200/50">
+                    {surface.type}: {surface.distance.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} km
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+          <button 
+            onClick={(e) => { e.stopPropagation(); onToggleVisibility(track.id); }} 
+            className="p-1.5 hover:bg-slate-100 rounded text-slate-500 transition-colors" 
+            title="Sichtbarkeit umschalten"
+          >
+            {track.visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+          </button>
+          <button 
+            onClick={(e) => { e.stopPropagation(); onRemoveTrack(track.id); }} 
+            className="p-1.5 hover:bg-red-50 rounded text-red-500 transition-colors" 
+            title="Track entfernen"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+interface SidebarProps {
+  tracks: GPXTrack[];
+  markedTrackId: string | null;
+  onMarkTrack: (id: string) => void;
+  onUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onToggleVisibility: (id: string) => void;
+  onRemoveTrack: (id: string) => void;
+  onMergeSelected: () => void;
+  onUndo: () => void;
+  canUndo: boolean;
+  onReorder: (oldIndex: number, newIndex: number) => void;
+  activeLayer: MapLayer;
+  setActiveLayer: (layer: MapLayer) => void;
+  is3D: boolean;
+  setIs3D: (mode: boolean) => void;
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ 
+  tracks, 
+  markedTrackId,
+  onMarkTrack,
+  onUpload, 
+  onToggleVisibility, 
+  onRemoveTrack, 
+  onMergeSelected,
+  onUndo,
+  canUndo,
+  onReorder,
+  activeLayer,
+  setActiveLayer,
+  is3D,
+  setIs3D,
+  isCollapsed,
+  onToggleCollapse
+}) => {
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (over && active.id !== over.id) {
+      const oldIndex = tracks.findIndex(t => t.id === active.id);
+      const newIndex = tracks.findIndex(t => t.id === over.id);
+      onReorder(oldIndex, newIndex);
+    }
+  };
+
+  return (
+    <div className={`${isCollapsed ? 'w-16' : 'w-80'} h-full shadow-2xl flex flex-col z-30 border-r border-slate-200 overflow-hidden transition-all duration-300 relative`}>
+      {/* AI Generated Background Image */}
+      <div 
+        className="absolute inset-0 z-0 opacity-60 pointer-events-none"
+        style={{
+          backgroundImage: 'url("https://images.unsplash.com/photo-1524661135-423995f22d0b?q=80&w=800&auto=format&fit=crop")',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center'
+        }}
+      />
+      <div className="absolute inset-0 z-0 bg-white/60 backdrop-blur-md pointer-events-none" />
+
+      <button 
+        onClick={onToggleCollapse}
+        className="absolute top-1/2 -right-3 -translate-y-1/2 w-6 h-12 bg-white border border-slate-200 rounded-full flex items-center justify-center shadow-md hover:bg-slate-50 transition-colors z-40 group"
+        title={isCollapsed ? "Menü ausklappen" : "Menü einklappen"}
+      >
+        {isCollapsed ? <ChevronRight className="w-4 h-4 text-slate-600 group-hover:scale-110 transition-transform" /> : <ChevronLeft className="w-4 h-4 text-slate-600 group-hover:scale-110 transition-transform" />}
+      </button>
+
+      <div className={`relative z-10 p-6 bg-slate-900/95 text-white flex items-center ${isCollapsed ? 'justify-center' : 'gap-2'}`}>
+        <Layers className={`w-6 h-6 text-blue-400 shrink-0 ${isCollapsed ? '' : ''}`} />
+        {!isCollapsed && (
+          <div>
+            <h1 className="text-xl font-bold whitespace-nowrap">GPX Master</h1>
+            <p className="text-[10px] text-slate-400 uppercase tracking-widest">OSM Pro Tools</p>
+          </div>
+        )}
+      </div>
+
+      <div className={`relative z-10 flex-1 overflow-y-auto p-4 space-y-6 ${isCollapsed ? 'items-center flex flex-col' : ''}`}>
+        {isCollapsed ? (
+          <div className="flex flex-col gap-6 items-center pt-4">
+            <label className="p-3 bg-slate-100 rounded-xl cursor-pointer hover:bg-slate-200 transition-colors text-slate-600" title="GPX/FIT hochladen">
+              <Upload className="w-6 h-6" />
+              <input type="file" className="hidden" accept=".gpx, .fit, .FIT, application/gpx+xml, application/octet-stream, application/x-garmin-fit" multiple onChange={onUpload} />
+            </label>
+            
+            <button 
+              onClick={() => setIs3D(!is3D)}
+              className={`p-3 rounded-xl transition-all ${is3D ? 'bg-purple-600 text-white shadow-lg shadow-purple-200' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              title="3D Ansicht umschalten"
+            >
+              <Box className="w-6 h-6" />
+            </button>
+
+            <div className="w-8 h-px bg-slate-200" />
+
+            <div className="flex flex-col gap-2">
+              {Object.values(MapLayer).map((layer) => (
+                <button
+                  key={layer}
+                  onClick={() => setActiveLayer(layer)}
+                  className={`w-10 h-10 flex items-center justify-center rounded-lg text-[10px] font-bold transition-colors border ${activeLayer === layer ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-white text-slate-400 border-transparent hover:bg-slate-50'}`}
+                  title={layer}
+                >
+                  {layer.substring(0, 2).toUpperCase()}
+                </button>
+              ))}
+            </div>
+
+            <div className="w-8 h-px bg-slate-200" />
+            
+            <div className="relative">
+              <div className="bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full absolute -top-2 -right-2 z-10">
+                {tracks.length}
+              </div>
+              <Menu className="w-6 h-6 text-slate-400" />
+            </div>
+          </div>
+        ) : (
+          <>
+            <section>
+              <label className="flex flex-col items-center justify-center w-full h-24 border-2 border-dashed border-slate-300 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors">
+                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                  <Upload className="w-8 h-8 text-slate-400 mb-2" />
+                  <p className="text-sm text-slate-500 font-medium">GPX oder FIT Datei hochladen</p>
+                </div>
+                <input type="file" className="hidden" accept=".gpx, .fit, .FIT, application/gpx+xml, application/octet-stream, application/x-garmin-fit" multiple onChange={onUpload} />
+              </label>
+            </section>
+
+            <section className="space-y-3">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Werkzeuge</h2>
+                {canUndo && (
+                  <button 
+                    onClick={onUndo}
+                    className="flex items-center gap-1 text-[10px] text-blue-600 font-bold hover:bg-blue-100 bg-blue-50 px-2 py-1 rounded transition-colors"
+                  >
+                    <Undo2 className="w-3 h-3" /> RÜCKGÄNGIG
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button 
+                  onClick={onMergeSelected}
+                  disabled={tracks.length < 2}
+                  className="flex items-center justify-center gap-2 p-3 rounded-lg text-sm font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                >
+                  <Combine className="w-4 h-4" />
+                  Verbinden
+                </button>
+                <button 
+                  onClick={() => setIs3D(!is3D)}
+                  className={`flex items-center justify-center gap-2 p-3 rounded-lg text-sm font-semibold transition-all ${is3D ? 'bg-purple-600 text-white shadow-lg shadow-purple-200' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}
+                >
+                  <Box className="w-4 h-4" />
+                  3D Ansicht {is3D ? 'aktiv' : ''}
+                </button>
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Kartentyp</h2>
+              <div className="grid grid-cols-2 gap-1.5">
+                {Object.values(MapLayer).map((layer) => (
+                  <button
+                    key={layer}
+                    onClick={() => setActiveLayer(layer)}
+                    className={`text-left px-2.5 py-1.5 rounded-md text-[11px] font-semibold transition-colors ${activeLayer === layer ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'text-slate-600 hover:bg-slate-50 border border-transparent'}`}
+                  >
+                    {layer}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="space-y-3">
+              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Routen ({tracks.length})</h2>
+              <div className="space-y-2 pb-6">
+                {tracks.length === 0 && (
+                  <p className="text-xs text-slate-400 italic text-center py-8 bg-slate-50/50 rounded-xl border border-dashed border-slate-200">Noch keine Routen geladen.</p>
+                )}
+                <DndContext 
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleDragEnd}
+                >
+                  <SortableContext 
+                    items={tracks.map(t => t.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    <div className="space-y-2">
+                      {tracks.map((track) => (
+                        <SortableTrackItem 
+                          key={track.id} 
+                          track={track} 
+                          isMarked={markedTrackId === track.id}
+                          onMark={onMarkTrack}
+                          onToggleVisibility={onToggleVisibility} 
+                          onRemoveTrack={onRemoveTrack} 
+                        />
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+              </div>
+            </section>
+          </>
+        )}
+      </div>
+
+      {!isCollapsed && (
+        <div className="relative z-10 p-4 border-t border-slate-200/50 bg-slate-50/80 backdrop-blur-sm text-[10px] text-slate-500 text-center font-medium">
+          Reihenfolge bestimmt Verbindungssequenz
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default Sidebar;
