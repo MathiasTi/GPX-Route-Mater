@@ -12,6 +12,7 @@ export interface PowerStats {
   maxPower: number;
   best20s: number;
   best1m: number;
+  best20m: number;
 }
 
 export interface SurfaceSegment {

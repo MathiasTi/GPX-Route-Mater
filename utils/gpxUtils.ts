@@ -40,15 +40,15 @@ export const calculatePowerStats = (points: GPXPoint[]): PowerStats | undefined 
   const validSmoothed = smoothedPower.filter(p => p !== undefined) as number[];
   const maxPower = validSmoothed.length > 0 ? Math.max(...validSmoothed) : 0;
 
-  // 4. Best 20s and 1m using 1s interpolation
+  // 4. Best 20s, 1m, 20m using 1s interpolation
   const timedPoints = points.map((p, i) => ({ ...p, power: smoothedPower[i] })).filter(p => p.time && p.power !== undefined);
-  if (timedPoints.length < 2) return { avgPower, maxPower, best20s: avgPower, best1m: avgPower };
+  if (timedPoints.length < 2) return { avgPower, maxPower, best20s: avgPower, best1m: avgPower, best20m: avgPower };
 
   const startTime = timedPoints[0].time!.getTime();
   const endTime = timedPoints[timedPoints.length - 1].time!.getTime();
   const durationSec = Math.floor((endTime - startTime) / 1000);
   
-  if (durationSec < 5) return { avgPower, maxPower, best20s: avgPower, best1m: avgPower };
+  if (durationSec < 5) return { avgPower, maxPower, best20s: avgPower, best1m: avgPower, best20m: avgPower };
 
   const power1s = new Float32Array(durationSec + 1);
   let pIdx = 0;
@@ -91,7 +91,8 @@ export const calculatePowerStats = (points: GPXPoint[]): PowerStats | undefined 
     avgPower,
     maxPower,
     best20s: getBestRolling(20),
-    best1m: getBestRolling(60)
+    best1m: getBestRolling(60),
+    best20m: getBestRolling(1200)
   };
 };
 
@@ -127,38 +128,39 @@ export const calculateElevationStats = (points: GPXPoint[]) => {
     totalDist += d;
   }
 
+  // Pre-fill missing elevation data
+  const filledEle = new Float64Array(points.length);
+  let lastValidEle = points.find(p => p.ele !== undefined)?.ele || 0;
+  for (let i = 0; i < points.length; i++) {
+    if (points[i].ele !== undefined) {
+      lastValidEle = points[i].ele!;
+    }
+    filledEle[i] = lastValidEle;
+  }
+
   // 1. Smooth elevation data (distance-based, 20m window)
   const smoothedEle = new Float64Array(points.length);
   const SMOOTH_WINDOW_KM = 0.020; 
   
   for (let i = 0; i < points.length; i++) {
-    if (points[i].ele === undefined) {
-      smoothedEle[i] = NaN;
-      continue;
-    }
-    
     let sum = 0;
     let count = 0;
     
     let j = i;
     while (j >= 0 && cumDist[i] - cumDist[j] <= SMOOTH_WINDOW_KM / 2) {
-      if (points[j].ele !== undefined) {
-        sum += points[j].ele!;
-        count++;
-      }
+      sum += filledEle[j];
+      count++;
       j--;
     }
     
     j = i + 1;
     while (j < points.length && cumDist[j] - cumDist[i] <= SMOOTH_WINDOW_KM / 2) {
-      if (points[j].ele !== undefined) {
-        sum += points[j].ele!;
-        count++;
-      }
+      sum += filledEle[j];
+      count++;
       j++;
     }
     
-    smoothedEle[i] = count > 0 ? sum / count : points[i].ele!;
+    smoothedEle[i] = count > 0 ? sum / count : filledEle[i];
   }
 
   // 2. Calculate ascent/descent
@@ -227,7 +229,7 @@ export const generateMockSurfaceStats = (totalDist: number) => {
   }, {} as Record<string, number>);
   
   return Object.entries(grouped)
-    .map(([type, distance]) => ({ type, distance }))
+    .map(([type, distance]) => ({ type, distance: distance as number }))
     .sort((a, b) => b.distance - a.distance);
 };
 

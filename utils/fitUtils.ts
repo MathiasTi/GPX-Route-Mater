@@ -37,11 +37,35 @@ export const parseFIT = async (arrayBuffer: ArrayBuffer, fileName: string): Prom
         if (Math.abs(lat) > 180) lat = lat * (180 / Math.pow(2, 31));
         if (Math.abs(lng) > 180) lng = lng * (180 / Math.pow(2, 31));
 
-        const ele = record.data.enhanced_altitude || record.data.altitude;
+        // Check for invalid coordinates (0x7FFFFFFF converted to degrees is ~180)
+        if (Math.abs(lat - 180) < 0.0001 || Math.abs(lng - 180) < 0.0001) {
+          return null;
+        }
+
+        let ele = record.data.enhanced_altitude;
+        if (ele === undefined) ele = record.data.altitude;
+        
+        // fit-decoder incorrectly divides altitude by 100 (assuming it's in cm like distance).
+        // Garmin FIT altitude is actually scale 5, offset 500.
+        // So fit-decoder gives us: parsed = raw / 100
+        // We need: true_ele = (raw / 5) - 500 = (parsed * 100 / 5) - 500 = parsed * 20 - 500
+        if (ele !== undefined && !isNaN(ele)) {
+          // Check for FIT invalid values (0xFFFF for uint16, 0xFFFFFFFF for uint32)
+          // fit-decoder divides these by 100, resulting in 655.35 and 42949672.95
+          if (Math.abs(ele - 655.35) < 0.01 || Math.abs(ele - 42949672.95) < 0.01) {
+            ele = undefined;
+          } else {
+            ele = (ele * 20) - 500;
+          }
+        } else {
+          ele = undefined;
+        }
+        
         const time = record.data.timestamp; // Already a Date from parseRecords
         const power = record.data.power;
         return { lat, lng, ele, time, power };
-      });
+      })
+      .filter((p: any) => p !== null) as GPXPoint[];
 
     if (points.length === 0) {
       console.error("FIT parsing error: No valid position records found");

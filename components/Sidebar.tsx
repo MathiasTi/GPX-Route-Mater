@@ -77,8 +77,9 @@ const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, 
                 <Zap className="w-3 h-3 shrink-0" />
                 <span title="Durchschnittliche Leistung">Ø {Math.round(track.powerStats.avgPower).toLocaleString('de-DE')}W</span>
                 <span title="Maximale Leistung">Max {Math.round(track.powerStats.maxPower).toLocaleString('de-DE')}W</span>
-                <span title="Beste 1 Minute">1m {Math.round(track.powerStats.best1m).toLocaleString('de-DE')}W</span>
                 <span title="Beste 20 Sekunden">20s {Math.round(track.powerStats.best20s).toLocaleString('de-DE')}W</span>
+                <span title="Beste 1 Minute">1m {Math.round(track.powerStats.best1m).toLocaleString('de-DE')}W</span>
+                <span title="Beste 20 Minuten">20m {Math.round(track.powerStats.best20m).toLocaleString('de-DE')}W</span>
               </div>
             )}
             {track.surfaceStats && track.surfaceStats.length > 0 && (

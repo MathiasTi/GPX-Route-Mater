@@ -42,9 +42,11 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
     const hasElevation = track.points.some(p => p.ele !== undefined);
     if (!hasElevation) return null;
 
+    let lastValidEle = track.points.find(p => p.ele !== undefined)?.ele || 0;
+
     rawData.push({ 
       dist: 0, 
-      ele: track.points[0].ele || 0, 
+      ele: track.points[0].ele !== undefined ? track.points[0].ele : lastValidEle, 
       lat: track.points[0].lat, 
       lng: track.points[0].lng,
       power: track.points[0].power,
@@ -54,7 +56,11 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
     for (let i = 1; i < track.points.length; i++) {
       const distStep = calculateDistance(track.points[i - 1], track.points[i]);
       totalDist += distStep;
-      const ele = track.points[i].ele || 0;
+      
+      const currentEle = track.points[i].ele;
+      const ele = currentEle !== undefined ? currentEle : lastValidEle;
+      if (currentEle !== undefined) lastValidEle = currentEle;
+
       rawData.push({ 
         dist: totalDist, 
         ele, 
@@ -396,7 +402,7 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
       }, {} as Record<string, number>);
       
       selectedSurfaceStats = Object.entries(grouped)
-        .map(([type, distance]) => ({ type, distance }))
+        .map(([type, distance]) => ({ type, distance: distance as number }))
         .sort((a, b) => b.distance - a.distance);
     }
   }

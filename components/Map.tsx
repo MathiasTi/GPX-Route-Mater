@@ -287,6 +287,14 @@ const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTra
                     <div className="font-bold">{track.name}</div>
                     <div>Distanz: {track.distance.toFixed(2)} km</div>
                     <div>Punkte: {track.points.length}</div>
+                    {track.powerStats && (
+                      <div className="mt-2 pt-2 border-t text-xs">
+                        <div className="font-semibold text-amber-600 mb-1">Leistung</div>
+                        <div>Ø {Math.round(track.powerStats.avgPower)}W | Max {Math.round(track.powerStats.maxPower)}W</div>
+                        <div>20s: {Math.round(track.powerStats.best20s)}W | 1m: {Math.round(track.powerStats.best1m)}W</div>
+                        <div>20m: {Math.round(track.powerStats.best20m)}W</div>
+                      </div>
+                    )}
                 </Popup>
               </Polyline>
 
