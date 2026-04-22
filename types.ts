@@ -5,6 +5,7 @@ export interface GPXPoint {
   ele?: number;
   time?: Date;
   power?: number;
+  hr?: number;
 }
 
 export interface PowerStats {
@@ -32,6 +33,8 @@ export interface GPXTrack {
   visible: boolean;
   powerStats?: PowerStats;
   surfaceStats?: SurfaceSegment[];
+  duration?: number; // in seconds
+  hasTimestamps?: boolean;
 }
 
 export enum MapLayer {

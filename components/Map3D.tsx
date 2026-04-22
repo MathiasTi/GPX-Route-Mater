@@ -1,22 +1,23 @@
 import React, { useMemo, useEffect, useRef, useState } from 'react';
-import Map, { Source, Layer, MapRef, NavigationControl } from 'react-map-gl/maplibre';
+import Map, { Source, Layer, MapRef, NavigationControl, Marker, Popup } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { GPXTrack, MapLayer, MAP_LAYERS } from '../types';
+import { GPXTrack, MapLayer, MAP_LAYERS, GPXPoint } from '../types';
 
 interface Map3DProps {
   tracks: GPXTrack[];
   activeLayer: MapLayer;
   markedTrackId: string | null;
   onMarkTrack: (id: string) => void;
-  hoveredPoint?: {lat: number, lng: number} | null;
-  onHoverPoint?: (point: {lat: number, lng: number} | null) => void;
+  hoveredPoint?: GPXPoint | null;
+  onHoverPoint?: (point: GPXPoint | null) => void;
   selectionBounds?: {minLat: number, maxLat: number, minLng: number, maxLng: number} | null;
   onSelection?: (bounds: {minLat: number, maxLat: number, minLng: number, maxLng: number} | null) => void;
   mapView: {lat: number, lng: number, zoom: number, pitch: number, bearing: number};
   onMapViewChange: (view: {lat: number, lng: number, zoom: number, pitch: number, bearing: number}) => void;
+  estimatedSpeed?: number;
 }
 
-const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMarkTrack, hoveredPoint, onHoverPoint, selectionBounds, onSelection, mapView, onMapViewChange }) => {
+const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMarkTrack, hoveredPoint, onHoverPoint, selectionBounds, onSelection, mapView, onMapViewChange, estimatedSpeed = 15 }) => {
   const mapRef = useRef<MapRef>(null);
   const layerConfig = MAP_LAYERS[activeLayer];
   const [pitch, setPitch] = useState(mapView.pitch);
@@ -229,6 +230,26 @@ const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMar
         <NavigationControl position="top-right" visualizePitch={true} />
         {trackSources.map(({ track, geojson, selectedGeojson }) => {
           const isMarked = track.id === markedTrackId;
+          
+          const pauses = [];
+          for (let i = 1; i < track.points.length; i++) {
+            const p = track.points[i];
+            const prevP = track.points[i - 1];
+            if (p.time && prevP.time) {
+              const diffMs = p.time.getTime() - prevP.time.getTime();
+              if (diffMs > 5 * 60 * 1000) {
+                pauses.push({
+                  lat: prevP.lat,
+                  lng: prevP.lng,
+                  durationMins: Math.floor(diffMs / 60000),
+                  startTime: prevP.time,
+                  endTime: p.time,
+                  idx: i
+                });
+              }
+            }
+          }
+
           return (
             <React.Fragment key={track.id}>
               <Source id={`track-${track.id}`} type="geojson" data={geojson}>
@@ -359,6 +380,31 @@ const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMar
                   />
                 </Source>
               )}
+
+              {/* Pauses > 5 minutes */}
+              {pauses.map(pause => (
+                <Marker
+                  key={`pause-${track.id}-${pause.idx}`}
+                  longitude={pause.lng}
+                  latitude={pause.lat}
+                  anchor="center"
+                >
+                  <div className="relative group cursor-pointer">
+                    <div className="bg-amber-500 w-6 h-6 rounded-full border-2 border-white shadow-md flex items-center justify-center text-white">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><rect width="4" height="16" x="6" y="4"/><rect width="4" height="16" x="14" y="4"/></svg>
+                    </div>
+                    
+                    {/* Tooltip on hover */}
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block w-max bg-white p-2 rounded shadow-lg border border-slate-200 text-xs z-50">
+                      <div className="font-bold text-amber-600 mb-1">Pause</div>
+                      <div>Dauer: {pause.durationMins} Minuten</div>
+                      <div>Start: {pause.startTime.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</div>
+                      <div>Ende: {pause.endTime.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</div>
+                      <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-b border-r border-slate-200 rotate-45"></div>
+                    </div>
+                  </div>
+                </Marker>
+              ))}
             </React.Fragment>
           );
         })}

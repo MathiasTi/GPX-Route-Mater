@@ -301,13 +301,30 @@ export const parseGPX = (xmlString: string, fileName: string): GPXTrack | null =
         power = parseFloat(powerNode.textContent || "0");
       }
 
-      return { lat, lng, ele, time, power };
+      // Extract HR from extensions
+      let hr: number | undefined;
+      const hrNode = pt.querySelector("hr") || pt.querySelector("extensions hr") || pt.querySelector("trackpointExtension hr") || pt.getElementsByTagNameNS("*", "hr")[0];
+      if (hrNode) {
+        hr = parseInt(hrNode.textContent || "0", 10);
+      }
+
+      return { lat, lng, ele, time, power, hr };
     });
 
     const name = xml.querySelector("name")?.textContent || fileName || "Unbenannter Track";
     const { ascent, descent, maxSlope, totalDist } = calculateElevationStats(points);
     const powerStats = calculatePowerStats(points);
     const surfaceStats = generateMockSurfaceStats(totalDist);
+    
+    let duration: number | undefined;
+    const hasTimestamps = points.some(p => p.time !== undefined);
+    if (hasTimestamps && points.length > 1) {
+      const firstTime = points.find(p => p.time !== undefined)?.time;
+      const lastTime = [...points].reverse().find(p => p.time !== undefined)?.time;
+      if (firstTime && lastTime) {
+        duration = (lastTime.getTime() - firstTime.getTime()) / 1000;
+      }
+    }
 
     const color = HIGH_CONTRAST_COLORS[colorIndex % HIGH_CONTRAST_COLORS.length];
     colorIndex++;
@@ -323,7 +340,9 @@ export const parseGPX = (xmlString: string, fileName: string): GPXTrack | null =
       maxSlope,
       visible: true,
       powerStats,
-      surfaceStats
+      surfaceStats,
+      duration,
+      hasTimestamps
     };
   } catch (error) {
     console.error("Error parsing GPX:", error);

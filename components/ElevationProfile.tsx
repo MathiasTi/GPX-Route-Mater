@@ -1,14 +1,15 @@
 
 import React, { useMemo, useState, useRef } from 'react';
-import { GPXTrack } from '../types';
+import { GPXTrack, GPXPoint } from '../types';
 import { calculateDistance } from '../utils/gpxUtils';
 
 interface ElevationProfileProps {
   track: GPXTrack;
-  onHoverPoint?: (point: {lat: number, lng: number} | null) => void;
-  hoveredPoint?: {lat: number, lng: number} | null;
+  onHoverPoint?: (point: GPXPoint | null) => void;
+  hoveredPoint?: GPXPoint | null;
   selectionBounds?: {minLat: number, maxLat: number, minLng: number, maxLng: number} | null;
   onSelection?: (bounds: {minLat: number, maxLat: number, minLng: number, maxLng: number} | null) => void;
+  estimatedSpeed?: number;
 }
 
 interface HoverInfo {
@@ -16,14 +17,20 @@ interface HoverInfo {
   ele: number;
   slope: number;
   power?: number;
+  hr?: number;
+  time?: Date;
   x: number;
   y: number;
 }
 
-const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint, hoveredPoint, selectionBounds, onSelection }) => {
+const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint, hoveredPoint, selectionBounds, onSelection, estimatedSpeed = 15 }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
   const [isSmoothed, setIsSmoothed] = useState(false);
+  const [showElevation, setShowElevation] = useState(true);
+  const [showPower, setShowPower] = useState(true);
+  const [showHr, setShowHr] = useState(true);
+  const [ftp, setFtp] = useState(210);
   const [dragStartX, setDragStartX] = useState<number | null>(null);
   const [dragCurrentX, setDragCurrentX] = useState<number | null>(null);
   const [showSelectedSurfaceStats, setShowSelectedSurfaceStats] = useState(true);
@@ -37,7 +44,7 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
     if (!track.points || track.points.length === 0) return null;
 
     let totalDist = 0;
-    const rawData: { dist: number; ele: number; lat: number; lng: number; power?: number; time?: Date }[] = [];
+    const rawData: { dist: number; ele: number; lat: number; lng: number; power?: number; hr?: number; time?: Date }[] = [];
     
     const hasElevation = track.points.some(p => p.ele !== undefined);
     if (!hasElevation) return null;
@@ -50,6 +57,7 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
       lat: track.points[0].lat, 
       lng: track.points[0].lng,
       power: track.points[0].power,
+      hr: track.points[0].hr,
       time: track.points[0].time
     });
 
@@ -67,12 +75,13 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
         lat: track.points[i].lat, 
         lng: track.points[i].lng,
         power: track.points[i].power,
+        hr: track.points[i].hr,
         time: track.points[i].time
       });
     }
 
     // Apply smoothing if enabled
-    const smoothedData = [...rawData];
+    const smoothedData: { dist: number; ele: number; lat: number; lng: number; power?: number; displayPower?: number; hr?: number; time?: Date }[] = rawData.map(d => ({ ...d, displayPower: d.power }));
     if (isSmoothed) {
       const windowSize = 5; // Moving average window
       for (let i = 0; i < rawData.length; i++) {
@@ -82,18 +91,41 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
           sum += rawData[j].ele;
           count++;
         }
-        smoothedData[i] = { ...rawData[i], ele: sum / count };
+        smoothedData[i].ele = sum / count;
       }
     }
 
-    const data: { dist: number; ele: number; slope: number; lat: number; lng: number; power?: number; time?: Date }[] = [];
+    // Always smooth power data for the visual curve (avoids barcode effect)
+    const POWER_WINDOW = 15; // roughly 15 seconds moving average
+    for (let i = 0; i < rawData.length; i++) {
+      if (rawData[i].power !== undefined) {
+        let sum = 0;
+        let count = 0;
+        for (let j = Math.max(0, i - POWER_WINDOW); j <= Math.min(rawData.length - 1, i + POWER_WINDOW); j++) {
+          if (rawData[j].power !== undefined) {
+            sum += rawData[j].power!;
+            count++;
+          }
+        }
+        smoothedData[i].displayPower = count > 0 ? sum / count : rawData[i].power;
+      }
+    }
+
+    const data: { dist: number; ele: number; slope: number; lat: number; lng: number; power?: number; displayPower?: number; hr?: number; time?: Date }[] = [];
     data.push({ ...smoothedData[0], slope: 0 });
 
     let maxPosSlopeVal = 0;
     let maxPosSlopeIdx = 0;
+    let maxEleVal = -Infinity;
+    let maxEleIdx = 0;
 
     for (let i = 1; i < smoothedData.length; i++) {
       const ele = smoothedData[i].ele;
+      
+      if (ele > maxEleVal) {
+        maxEleVal = ele;
+        maxEleIdx = i;
+      }
       
       // Windowed slope calculation for display (50m window for better responsiveness)
       let j = i;
@@ -122,8 +154,34 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
     const distRange = totalDist;
     const eleRange = maxEle - minEle || 1;
 
-    return { data, minEle, maxEle, distRange, eleRange, maxPosSlopeVal, maxPosSlopeIdx };
-  }, [track, isSmoothed]);
+    // Calculate HR range
+    const validHrData = data.filter(d => d.hr !== undefined).map(d => d.hr!);
+    const hasHr = validHrData.length > 0;
+    const minHr = hasHr ? Math.max(0, Math.min(...validHrData) - 10) : 0; // Pad bottom
+    const maxHr = hasHr ? Math.max(...validHrData) + 10 : 1; // Pad top
+    const hrRange = maxHr - minHr || 1;
+
+    // Calculate Power range
+    const validPowerData = data.filter(d => d.displayPower !== undefined).map(d => d.displayPower!);
+    const hasPower = validPowerData.length > 0;
+    const minPower = hasPower ? Math.max(0, Math.min(...validPowerData) - 10) : 0;
+    const maxPower = hasPower ? Math.max(...validPowerData) + 10 : 1;
+    const powerRange = maxPower - minPower || 1;
+
+    let duration: number | undefined;
+    const hasTimestamps = track.points.some(p => p.time !== undefined);
+    if (hasTimestamps && track.points.length > 1) {
+      const firstTime = track.points.find(p => p.time !== undefined)?.time;
+      const lastTime = [...track.points].reverse().find(p => p.time !== undefined)?.time;
+      if (firstTime && lastTime) {
+        duration = (lastTime.getTime() - firstTime.getTime()) / 1000;
+      }
+    } else {
+      duration = (totalDist / estimatedSpeed) * 3600;
+    }
+
+    return { data, minEle, maxEle, distRange, eleRange, maxPosSlopeVal, maxPosSlopeIdx, maxEleIdx, duration, hasTimestamps, hasHr, minHr, maxHr, hrRange, hasPower, minPower, maxPower, powerRange };
+  }, [track, isSmoothed, estimatedSpeed]);
 
   const padding = { top: 25, bottom: 25, left: 10, right: 10 };
   const width = 1000;
@@ -177,11 +235,13 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
       ele: point.ele,
       slope: point.slope,
       power: point.power,
+      hr: point.hr,
+      time: point.time,
       x,
       y
     });
     if (onHoverPoint) {
-      onHoverPoint({ lat: point.lat, lng: point.lng });
+      onHoverPoint({ lat: point.lat, lng: point.lng, ele: point.ele, time: point.time, power: point.power, hr: point.hr });
     }
   };
 
@@ -238,11 +298,13 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
       ele: point.ele,
       slope: point.slope,
       power: point.power,
+      hr: point.hr,
+      time: point.time,
       x,
       y
     });
     if (onHoverPoint) {
-      onHoverPoint({ lat: point.lat, lng: point.lng });
+      onHoverPoint({ lat: point.lat, lng: point.lng, ele: point.ele, time: point.time, power: point.power, hr: point.hr });
     }
   };
 
@@ -304,6 +366,28 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
   const { data, minEle, maxEle, distRange, eleRange, maxPosSlopeVal, maxPosSlopeIdx } = profileData;
   const graphWidth = width - padding.left - padding.right;
   const graphHeight = height - padding.top - padding.bottom;
+
+  const powerStops: React.ReactNode[] = [];
+  if (profileData.hasPower) {
+    const getPowerOffset = (p: number) => Math.max(0, Math.min(1, (p - profileData.minPower) / profileData.powerRange));
+    const powerZones = [
+      { limit: ftp * 0.55, color: '#9ca3af' }, // Z1
+      { limit: ftp * 0.75, color: '#3b82f6' }, // Z2
+      { limit: ftp * 0.90, color: '#22c55e' }, // Z3
+      { limit: ftp * 1.05, color: '#eab308' }, // Z4
+      { limit: ftp * 1.20, color: '#f97316' }, // Z5
+      { limit: ftp * 1.50, color: '#ef4444' }, // Z6
+      { limit: Infinity,   color: '#a855f7' }  // Z7
+    ];
+    let currentOffset = 0;
+    for (let i = 0; i < powerZones.length; i++) {
+       const offset = getPowerOffset(powerZones[i].limit);
+       powerStops.push(<stop key={`start-${i}`} offset={`${currentOffset * 100}%`} stopColor={powerZones[i].color} />);
+       powerStops.push(<stop key={`end-${i}`} offset={`${offset * 100}%`} stopColor={powerZones[i].color} />);
+       currentOffset = offset;
+       if (offset >= 1) break;
+    }
+  }
 
   // Calculate selected regions and stats
   const selectedRegions: {startX: number, endX: number}[] = [];
@@ -420,6 +504,11 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
   const maxSlopeX = (maxSlopePoint.dist / distRange) * graphWidth + padding.left;
   const maxSlopeY = height - padding.bottom - ((maxSlopePoint.ele - minEle) / eleRange) * graphHeight;
 
+  // Coordinates for marking the highest point
+  const maxElePoint = data[profileData.maxEleIdx];
+  const maxEleX = (maxElePoint.dist / distRange) * graphWidth + padding.left;
+  const maxEleY = height - padding.bottom - ((maxElePoint.ele - minEle) / eleRange) * graphHeight;
+
   return (
     <div className="h-full w-full flex flex-col select-none">
       <div className="flex justify-between items-center mb-2 px-2">
@@ -430,6 +519,39 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
           </h3>
         </div>
         <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 mr-2">
+            <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider">
+              <input 
+                type="checkbox" 
+                checked={showElevation} 
+                onChange={(e) => setShowElevation(e.target.checked)}
+                className="w-3.5 h-3.5 text-slate-600 rounded bg-slate-100 border-slate-300 focus:ring-slate-500 cursor-pointer"
+              />
+              Höhe
+            </label>
+            {profileData.hasPower && (
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-bold text-slate-500 hover:text-amber-600 transition-colors uppercase tracking-wider">
+                <input 
+                  type="checkbox" 
+                  checked={showPower} 
+                  onChange={(e) => setShowPower(e.target.checked)}
+                  className="w-3.5 h-3.5 text-amber-500 rounded bg-slate-100 border-slate-300 focus:ring-amber-500 cursor-pointer"
+                />
+                Watt
+              </label>
+            )}
+            {profileData.hasHr && (
+              <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-bold text-slate-500 hover:text-red-500 transition-colors uppercase tracking-wider">
+                <input 
+                  type="checkbox" 
+                  checked={showHr} 
+                  onChange={(e) => setShowHr(e.target.checked)}
+                  className="w-3.5 h-3.5 text-red-500 rounded bg-slate-100 border-slate-300 focus:ring-red-500 cursor-pointer"
+                />
+                HF
+              </label>
+            )}
+          </div>
           <label className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-500 hover:text-slate-700 transition-colors">
             <input 
               type="checkbox" 
@@ -442,6 +564,20 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
             </div>
             Glätten
           </label>
+          {profileData.hasPower && (
+            <div className="flex items-center gap-2 ml-2">
+              <label className="text-[10px] font-bold text-slate-500 tracking-wider">FTP:</label>
+              <input 
+                type="range" 
+                min="150" 
+                max="350" 
+                value={ftp} 
+                onChange={(e) => setFtp(parseInt(e.target.value, 10))}
+                className="w-20 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-amber-500"
+              />
+              <span className="text-xs font-bold text-slate-700 w-7">{ftp}</span>
+            </div>
+          )}
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-bold font-mono text-slate-500 bg-slate-50 px-3 py-1 rounded-full border border-slate-100 shadow-sm">
             {selectionBounds && selectedRegions.length > 0 ? (
               <>
@@ -511,6 +647,11 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
               <stop offset="0%" stopColor={track.color} stopOpacity="0.4" />
               <stop offset="100%" stopColor={track.color} stopOpacity="0.05" />
             </linearGradient>
+            {profileData.hasPower && (
+              <linearGradient id={`power-gradient-${track.id}`} gradientUnits="userSpaceOnUse" x1="0" y1={height - padding.bottom} x2="0" y2={padding.top}>
+                {powerStops}
+              </linearGradient>
+            )}
             <filter id="shadow">
               <feDropShadow dx="0" dy="1" stdDeviation="1" floodOpacity="0.2"/>
             </filter>
@@ -534,17 +675,66 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
           ))}
 
           {/* Filled Path */}
-          <path d={areaPath} fill={`url(#grad-${track.id})`} />
+          {showElevation && <path d={areaPath} fill={`url(#grad-${track.id})`} />}
           
           {/* Elevation Line */}
-          <polyline
-            fill="none"
-            stroke={track.color}
-            strokeWidth="2.5"
-            strokeLinejoin="round"
-            strokeLinecap="round"
-            points={points}
-          />
+          {showElevation && (
+            <polyline
+              fill="none"
+              stroke={track.color}
+              strokeWidth="2.5"
+              strokeLinejoin="round"
+              strokeLinecap="round"
+              points={points}
+            />
+          )}
+
+          {/* Power Line */}
+          {showPower && profileData.hasPower && (() => {
+            const powerPoints = profileData.data
+              .filter(d => d.displayPower !== undefined)
+              .map(d => {
+                const px = padding.left + (d.dist / profileData.distRange) * graphWidth;
+                const py = height - padding.bottom - ((d.displayPower! - profileData.minPower) / profileData.powerRange) * graphHeight;
+                return `${px},${py}`;
+              })
+              .join(' ');
+
+            return (
+              <polyline
+                fill="none"
+                stroke={`url(#power-gradient-${track.id})`}
+                strokeWidth="2.5"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                points={powerPoints}
+                opacity="1"
+              />
+            );
+          })()}
+
+          {/* Heart Rate Line */}
+          {showHr && profileData.hasHr && (() => {
+            const hrPoints = profileData.data
+              .filter(d => d.hr !== undefined)
+              .map(d => {
+                const px = padding.left + (d.dist / profileData.distRange) * graphWidth;
+                const py = height - padding.bottom - ((d.hr! - profileData.minHr) / profileData.hrRange) * graphHeight;
+                return `${px},${py}`;
+              })
+              .join(' ');
+
+            return (
+              <polyline
+                fill="none"
+                stroke="rgba(239, 68, 68, 0.5)" // Red with opacity
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+                points={hrPoints}
+              />
+            );
+          })()}
 
           {/* Selected Polylines */}
           {selectedPolylines.map((pts, i) => (
@@ -572,7 +762,7 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
           )}
 
           {/* Special Marker for Max POSITIVE Slope */}
-          {maxPosSlopeVal > 0 && (
+          {showElevation && maxPosSlopeVal > 0 && (
             <g>
               <circle 
                 cx={maxSlopeX} 
@@ -591,6 +781,30 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
                 className="text-[9px] fill-emerald-700 font-bold font-mono"
               >
                 Max Steigung: {maxPosSlopeVal.toFixed(1)}%
+              </text>
+            </g>
+          )}
+
+          {/* Special Marker for Max Elevation */}
+          {showElevation && (
+            <g>
+              <circle 
+                cx={maxEleX} 
+                cy={maxEleY} 
+                r="4.5" 
+                fill="#ef4444" 
+                stroke="white" 
+                strokeWidth="1.5"
+                className="animate-pulse"
+                style={{ filter: 'drop-shadow(0px 0px 2px rgba(239,68,68,0.5))' }}
+              />
+              <text 
+                x={maxEleX} 
+                y={maxEleY - 10} 
+                textAnchor="middle" 
+                className="text-[9px] fill-red-700 font-bold font-mono"
+              >
+                Höchster Punkt: {maxEle.toFixed(0)}m
               </text>
             </g>
           )}
@@ -622,17 +836,36 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
 
             return ticks.map((d, i) => {
               const x = padding.left + (d / distRange) * graphWidth;
+              
+              let timeStr = "";
+              if (profileData.duration) {
+                const timeAtDist = (d / distRange) * profileData.duration;
+                if (profileData.hasTimestamps && track.points[0].time) {
+                  const t = new Date(track.points[0].time.getTime() + timeAtDist * 1000);
+                  timeStr = t.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+                } else {
+                  const h = Math.floor(timeAtDist / 3600);
+                  const m = Math.floor((timeAtDist % 3600) / 60);
+                  timeStr = `+${h}h ${m}m`;
+                }
+              }
+
               return (
                 <g key={i}>
                   <line x1={x} y1={height - padding.bottom} x2={x} y2={height - padding.bottom + 4} stroke="#cbd5e1" strokeWidth="1" />
-                  <text x={x} y={height - 8} textAnchor="middle" className="text-[9px] fill-slate-400 font-mono font-medium">
+                  <text x={x} y={height - 14} textAnchor="middle" className="text-[9px] fill-slate-400 font-mono font-medium">
                     {d.toFixed(d % 1 === 0 ? 0 : 1)}
                   </text>
+                  {timeStr && (
+                    <text x={x} y={height - 4} textAnchor="middle" className="text-[8px] fill-blue-400 font-mono font-medium">
+                      {timeStr}
+                    </text>
+                  )}
                 </g>
               );
             });
           })()}
-          <text x={width / 2} y={height - 2} textAnchor="middle" className="text-[8px] fill-slate-300 font-bold uppercase tracking-widest">Entfernung (km)</text>
+          <text x={width / 2} y={height - 2} textAnchor="middle" className="text-[8px] fill-slate-300 font-bold uppercase tracking-widest">Entfernung (km) / Zeit</text>
 
           {/* Interaction Tooltip (Mouse Hover) */}
           {hoverInfo && (
@@ -656,40 +889,85 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
                 filter="url(#shadow)"
               />
               
-              <rect 
-                x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 120 : hoverInfo.x + 10} 
-                y={hoverInfo.y - 45 < 5 ? hoverInfo.y + 15 : hoverInfo.y - 45} 
-                width="110" 
-                height={hoverInfo.power !== undefined ? "52" : "40"} 
-                rx="6" 
-                fill="white" 
-                stroke="#e2e8f0" 
-                filter="url(#shadow)"
-              />
-              
-              <text 
-                x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
-                y={hoverInfo.y - 45 < 5 ? hoverInfo.y + 30 : hoverInfo.y - 30} 
-                className="text-[10px] font-bold fill-slate-700 font-mono"
-              >
-                Höhe: {hoverInfo.ele.toLocaleString('de-DE', { maximumFractionDigits: 0 })}m
-              </text>
-              {hoverInfo.power !== undefined && (
-                <text 
-                  x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
-                  y={hoverInfo.y - 45 < 5 ? hoverInfo.y + 42 : hoverInfo.y - 18} 
-                  className="text-[10px] font-bold fill-amber-600 font-mono"
-                >
-                  Leistung: {hoverInfo.power.toLocaleString('de-DE', { maximumFractionDigits: 0 })}W
-                </text>
-              )}
-              <text 
-                x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
-                y={hoverInfo.y - 45 < 5 ? hoverInfo.y + (hoverInfo.power !== undefined ? 54 : 45) : hoverInfo.y - (hoverInfo.power !== undefined ? 6 : 15)} 
-                className="text-[9px] fill-slate-500 font-mono"
-              >
-                {hoverInfo.dist.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}km | {hoverInfo.slope.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
-              </text>
+              {(() => {
+                const hasPower = hoverInfo.power !== undefined && showPower;
+                const hasTime = hoverInfo.time !== undefined;
+                let boxHeight = 40;
+                if (hasPower) boxHeight += 12;
+                if (hoverInfo.hr !== undefined && showHr) boxHeight += 12;
+                boxHeight += 12; // Always show time or estimated time
+                
+                let currentY = hoverInfo.y - 45 < 5 ? hoverInfo.y + 30 : hoverInfo.y - 30;
+                
+                return (
+                  <>
+                    <rect 
+                      x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 120 : hoverInfo.x + 10} 
+                      y={hoverInfo.y - 45 < 5 ? hoverInfo.y + 15 : hoverInfo.y - 45} 
+                      width="120" 
+                      height={boxHeight} 
+                      rx="6" 
+                      fill="white" 
+                      stroke="#e2e8f0" 
+                      filter="url(#shadow)"
+                    />
+                    
+                    <text 
+                      x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
+                      y={currentY} 
+                      className="text-[10px] font-bold fill-slate-700 font-mono"
+                    >
+                      Höhe: {hoverInfo.ele.toLocaleString('de-DE', { maximumFractionDigits: 0 })}m
+                    </text>
+                    
+                    {hasPower && (
+                      <text 
+                        x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
+                        y={currentY += 12} 
+                        className="text-[10px] font-bold fill-amber-600 font-mono"
+                      >
+                        Leistung: {hoverInfo.power!.toLocaleString('de-DE', { maximumFractionDigits: 0 })}W
+                      </text>
+                    )}
+
+                    {hoverInfo.hr !== undefined && showHr && (
+                      <text 
+                        x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
+                        y={currentY += 12} 
+                        className="text-[10px] font-bold fill-red-500 font-mono"
+                      >
+                        HF: {hoverInfo.hr.toLocaleString('de-DE', { maximumFractionDigits: 0 })} bpm
+                      </text>
+                    )}
+
+                    {hasTime ? (
+                      <text 
+                        x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
+                        y={currentY += 12} 
+                        className="text-[10px] font-bold fill-blue-600 font-mono"
+                      >
+                        Zeit: {new Date(hoverInfo.time!).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                      </text>
+                    ) : (
+                      <text 
+                        x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
+                        y={currentY += 12} 
+                        className="text-[10px] font-bold fill-blue-600 font-mono"
+                      >
+                        Zeit: +{Math.floor((hoverInfo.dist / estimatedSpeed))}h {Math.floor(((hoverInfo.dist / estimatedSpeed) * 60) % 60)}m
+                      </text>
+                    )}
+                    
+                    <text 
+                      x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
+                      y={currentY += 12} 
+                      className="text-[9px] fill-slate-500 font-mono"
+                    >
+                      {hoverInfo.dist.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}km | {hoverInfo.slope.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                    </text>
+                  </>
+                );
+              })()}
             </g>
           )}
 

@@ -4,7 +4,7 @@ import Sidebar from './components/Sidebar';
 import Map from './components/Map';
 import Map3D from './components/Map3D';
 import ElevationProfile from './components/ElevationProfile';
-import { GPXTrack, MapLayer } from './types';
+import { GPXTrack, GPXPoint, MapLayer } from './types';
 import { parseGPX, mergeTracks, validateGPX } from './utils/gpxUtils';
 import { parseFIT } from './utils/fitUtils';
 import { arrayMove } from '@dnd-kit/sortable';
@@ -23,9 +23,10 @@ const App: React.FC = () => {
     pitch: 60,
     bearing: 0
   });
-  const [hoveredPoint, setHoveredPoint] = useState<{lat: number, lng: number} | null>(null);
+  const [hoveredPoint, setHoveredPoint] = useState<GPXPoint | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [estimatedSpeed, setEstimatedSpeed] = useState(15); // km/h
 
   const handleToggle3D = useCallback((mode: boolean) => {
     setIs3D(mode);
@@ -156,6 +157,8 @@ const App: React.FC = () => {
         setIs3D={handleToggle3D}
         isCollapsed={isSidebarCollapsed}
         onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+        estimatedSpeed={estimatedSpeed}
+        setEstimatedSpeed={setEstimatedSpeed}
       />
       <main className="flex-1 flex flex-col relative overflow-hidden">
         <div className="flex-1 relative">
@@ -171,6 +174,7 @@ const App: React.FC = () => {
               onSelection={setSelectionBounds}
               mapView={mapView}
               onMapViewChange={setMapView}
+              estimatedSpeed={estimatedSpeed}
             />
           ) : (
             <Map 
@@ -184,6 +188,7 @@ const App: React.FC = () => {
               onSelection={setSelectionBounds}
               mapView={mapView}
               onMapViewChange={setMapView}
+              estimatedSpeed={estimatedSpeed}
             />
           )}
           
@@ -242,6 +247,7 @@ const App: React.FC = () => {
               hoveredPoint={hoveredPoint}
               selectionBounds={selectionBounds}
               onSelection={setSelectionBounds}
+              estimatedSpeed={estimatedSpeed}
             />
           </div>
         )}

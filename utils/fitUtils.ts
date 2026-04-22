@@ -45,17 +45,11 @@ export const parseFIT = async (arrayBuffer: ArrayBuffer, fileName: string): Prom
         let ele = record.data.enhanced_altitude;
         if (ele === undefined) ele = record.data.altitude;
         
-        // fit-decoder incorrectly divides altitude by 100 (assuming it's in cm like distance).
-        // Garmin FIT altitude is actually scale 5, offset 500.
-        // So fit-decoder gives us: parsed = raw / 100
-        // We need: true_ele = (raw / 5) - 500 = (parsed * 100 / 5) - 500 = parsed * 20 - 500
+        // fit-decoder usually applies scale and offset correctly.
         if (ele !== undefined && !isNaN(ele)) {
-          // Check for FIT invalid values (0xFFFF for uint16, 0xFFFFFFFF for uint32)
-          // fit-decoder divides these by 100, resulting in 655.35 and 42949672.95
-          if (Math.abs(ele - 655.35) < 0.01 || Math.abs(ele - 42949672.95) < 0.01) {
+          // Check for FIT invalid values (if not handled by decoder)
+          if (ele === 65535 || ele === 4294967295 || Math.abs(ele - 655.35) < 0.01 || Math.abs(ele - 42949672.95) < 0.01) {
             ele = undefined;
-          } else {
-            ele = (ele * 20) - 500;
           }
         } else {
           ele = undefined;
@@ -63,7 +57,8 @@ export const parseFIT = async (arrayBuffer: ArrayBuffer, fileName: string): Prom
         
         const time = record.data.timestamp; // Already a Date from parseRecords
         const power = record.data.power;
-        return { lat, lng, ele, time, power };
+        const hr = record.data.heart_rate;
+        return { lat, lng, ele, time, power, hr };
       })
       .filter((p: any) => p !== null) as GPXPoint[];
 
@@ -76,6 +71,16 @@ export const parseFIT = async (arrayBuffer: ArrayBuffer, fileName: string): Prom
     const { ascent, descent, maxSlope, totalDist } = calculateElevationStats(points);
     const powerStats = calculatePowerStats(points);
     const surfaceStats = generateMockSurfaceStats(totalDist);
+    
+    let duration: number | undefined;
+    const hasTimestamps = points.some(p => p.time !== undefined);
+    if (hasTimestamps && points.length > 1) {
+      const firstTime = points.find(p => p.time !== undefined)?.time;
+      const lastTime = [...points].reverse().find(p => p.time !== undefined)?.time;
+      if (firstTime && lastTime) {
+        duration = (lastTime.getTime() - firstTime.getTime()) / 1000;
+      }
+    }
 
     const color = HIGH_CONTRAST_COLORS[colorIndex % HIGH_CONTRAST_COLORS.length];
     colorIndex++;
@@ -91,7 +96,9 @@ export const parseFIT = async (arrayBuffer: ArrayBuffer, fileName: string): Prom
       maxSlope,
       visible: true,
       powerStats,
-      surfaceStats
+      surfaceStats,
+      duration,
+      hasTimestamps
     };
   } catch (error) {
     console.error("Error parsing FIT:", error);

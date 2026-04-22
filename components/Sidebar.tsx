@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { GPXTrack, MapLayer } from '../types';
-import { Upload, Trash2, Combine, Eye, EyeOff, Ruler, Layers, GripVertical, Undo2, TrendingUp, TrendingDown, Box, ChevronLeft, ChevronRight, Menu, Zap } from 'lucide-react';
+import { Upload, Trash2, Combine, Eye, EyeOff, Ruler, Layers, GripVertical, Undo2, TrendingUp, TrendingDown, Box, ChevronLeft, ChevronRight, Menu, Zap, Clock } from 'lucide-react';
 import { 
   DndContext, 
   closestCenter, 
@@ -25,9 +25,10 @@ interface TrackItemProps {
   onMark: (id: string) => void;
   onToggleVisibility: (id: string) => void;
   onRemoveTrack: (id: string) => void;
+  estimatedSpeed: number;
 }
 
-const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, onToggleVisibility, onRemoveTrack }) => {
+const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, onToggleVisibility, onRemoveTrack, estimatedSpeed }) => {
   const {
     attributes,
     listeners,
@@ -66,6 +67,17 @@ const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, 
               <span className={`${isMarked ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'} px-1.5 py-0.5 rounded font-mono`}>{track.distance.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} km</span>
               <span className="text-slate-300">•</span>
               <span>{track.points.length.toLocaleString('de-DE')} Pkt</span>
+              {track.duration ? (
+                <>
+                  <span className="text-slate-300">•</span>
+                  <span className="flex items-center gap-0.5"><Clock className="w-3 h-3" /> {Math.floor(track.duration / 3600)}h {Math.floor((track.duration % 3600) / 60)}m</span>
+                </>
+              ) : (
+                <>
+                  <span className="text-slate-300">•</span>
+                  <span className="flex items-center gap-0.5"><Clock className="w-3 h-3" /> {Math.floor((track.distance / estimatedSpeed))}h {Math.floor(((track.distance / estimatedSpeed) * 60) % 60)}m</span>
+                </>
+              )}
             </div>
             <div className="text-[10px] text-slate-400 flex items-center gap-3 font-mono">
               <span className="flex items-center gap-0.5 text-emerald-600"><TrendingUp className="w-3 h-3" /> {Math.round(track.ascent).toLocaleString('de-DE')}m</span>
@@ -132,6 +144,8 @@ interface SidebarProps {
   setIs3D: (mode: boolean) => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
+  estimatedSpeed: number;
+  setEstimatedSpeed: (speed: number) => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ 
@@ -150,7 +164,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   is3D,
   setIs3D,
   isCollapsed,
-  onToggleCollapse
+  onToggleCollapse,
+  estimatedSpeed,
+  setEstimatedSpeed
 }) => {
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -297,6 +313,25 @@ const Sidebar: React.FC<SidebarProps> = ({
               </div>
             </section>
 
+            {tracks.some(t => !t.hasTimestamps) && (
+              <section className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Geschwindigkeit</h2>
+                  <span className="text-xs font-bold text-blue-600">{estimatedSpeed} km/h</span>
+                </div>
+                <input 
+                  type="range" 
+                  min="5" 
+                  max="50" 
+                  step="1" 
+                  value={estimatedSpeed} 
+                  onChange={(e) => setEstimatedSpeed(Number(e.target.value))}
+                  className="w-full accent-blue-600"
+                />
+                <p className="text-[10px] text-slate-500">Für die Schätzung der Dauer bei GPX-Dateien ohne Zeitstempel.</p>
+              </section>
+            )}
+
             <section className="space-y-3">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Routen ({tracks.length})</h2>
               <div className="space-y-2 pb-6">
@@ -321,6 +356,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                           onMark={onMarkTrack}
                           onToggleVisibility={onToggleVisibility} 
                           onRemoveTrack={onRemoveTrack} 
+                          estimatedSpeed={estimatedSpeed}
                         />
                       ))}
                     </div>

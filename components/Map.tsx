@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Polyline, useMapEvents, useMap, Marker, Popup, Rectangle } from 'react-leaflet';
 import L from 'leaflet';
-import { GPXTrack, MapLayer, MAP_LAYERS } from '../types';
+import { GPXTrack, MapLayer, MAP_LAYERS, GPXPoint } from '../types';
 import { calculateDistance } from '../utils/gpxUtils';
 
 // Fix for default marker icons in Leaflet + React
@@ -19,12 +19,13 @@ interface MapProps {
   activeLayer: MapLayer;
   markedTrackId: string | null;
   onMarkTrack: (id: string) => void;
-  hoveredPoint?: {lat: number, lng: number} | null;
-  onHoverPoint?: (point: {lat: number, lng: number} | null) => void;
+  hoveredPoint?: GPXPoint | null;
+  onHoverPoint?: (point: GPXPoint | null) => void;
   selectionBounds: {minLat: number, maxLat: number, minLng: number, maxLng: number} | null;
   onSelection: (bounds: {minLat: number, maxLat: number, minLng: number, maxLng: number} | null) => void;
   mapView: {lat: number, lng: number, zoom: number, pitch?: number, bearing?: number};
   onMapViewChange: (view: {lat: number, lng: number, zoom: number, pitch: number, bearing: number}) => void;
+  estimatedSpeed?: number;
 }
 
 const ZoomToTracks = ({ tracks }: { tracks: GPXTrack[] }) => {
@@ -212,7 +213,7 @@ const SelectionTool = ({ active, onSelection, currentBounds }: { active: boolean
   );
 };
 
-const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTrack, hoveredPoint, onHoverPoint, selectionBounds, onSelection, mapView, onMapViewChange }) => {
+const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTrack, hoveredPoint, onHoverPoint, selectionBounds, onSelection, mapView, onMapViewChange, estimatedSpeed = 15 }) => {
   const layer = MAP_LAYERS[activeLayer];
 
   return (
@@ -268,7 +269,18 @@ const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTra
                     onMarkTrack(track.id);
                   },
                   mousemove: (e) => {
-                    if (onHoverPoint) onHoverPoint({lat: e.latlng.lat, lng: e.latlng.lng});
+                    if (onHoverPoint) {
+                      let closestPoint = track.points[0];
+                      let minDiff = Infinity;
+                      for (const pt of track.points) {
+                        const diff = Math.abs(pt.lat - e.latlng.lat) + Math.abs(pt.lng - e.latlng.lng);
+                        if (diff < minDiff) {
+                          minDiff = diff;
+                          closestPoint = pt;
+                        }
+                      }
+                      onHoverPoint(closestPoint);
+                    }
                   },
                   mouseout: () => {
                     if (onHoverPoint) onHoverPoint(null);
@@ -287,6 +299,11 @@ const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTra
                     <div className="font-bold">{track.name}</div>
                     <div>Distanz: {track.distance.toFixed(2)} km</div>
                     <div>Punkte: {track.points.length}</div>
+                    {track.duration ? (
+                      <div>Dauer: {Math.floor(track.duration / 3600)}h {Math.floor((track.duration % 3600) / 60)}m</div>
+                    ) : (
+                      <div>Dauer: {Math.floor((track.distance / estimatedSpeed))}h {Math.floor(((track.distance / estimatedSpeed) * 60) % 60)}m</div>
+                    )}
                     {track.powerStats && (
                       <div className="mt-2 pt-2 border-t text-xs">
                         <div className="font-semibold text-amber-600 mb-1">Leistung</div>
@@ -309,6 +326,53 @@ const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTra
                   interactive={false}
                 />
               ))}
+
+              {/* Pauses > 5 minutes */}
+              {(() => {
+                const pauses = [];
+                for (let i = 1; i < track.points.length; i++) {
+                  const p = track.points[i];
+                  const prevP = track.points[i - 1];
+                  if (p.time && prevP.time) {
+                    const diffMs = p.time.getTime() - prevP.time.getTime();
+                    if (diffMs > 5 * 60 * 1000) {
+                      pauses.push({
+                        lat: prevP.lat,
+                        lng: prevP.lng,
+                        durationMins: Math.floor(diffMs / 60000),
+                        startTime: prevP.time,
+                        endTime: p.time,
+                        idx: i
+                      });
+                    }
+                  }
+                }
+                return pauses.map(pause => (
+                  <Marker
+                    key={`pause-${track.id}-${pause.idx}`}
+                    position={[pause.lat, pause.lng]}
+                    icon={new L.DivIcon({
+                      className: 'custom-pause-icon',
+                      html: `
+                        <div class="relative">
+                          <div class="bg-amber-500 w-6 h-6 rounded-full border-2 border-white shadow-md flex items-center justify-center text-white">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect width="4" height="16" x="6" y="4"/><rect width="4" height="16" x="14" y="4"/></svg>
+                          </div>
+                        </div>
+                      `,
+                      iconSize: [24, 24],
+                      iconAnchor: [12, 12]
+                    })}
+                  >
+                    <Popup>
+                      <div className="font-bold text-amber-600">Pause</div>
+                      <div>Dauer: {pause.durationMins} Minuten</div>
+                      <div>Start: {pause.startTime.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</div>
+                      <div>Ende: {pause.endTime.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</div>
+                    </Popup>
+                  </Marker>
+                ));
+              })()}
             </React.Fragment>
           );
         })}
@@ -325,7 +389,26 @@ const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTra
             interactive={false}
             icon={new L.DivIcon({
               className: 'custom-div-icon',
-              html: `<div class="bg-emerald-500 w-4 h-4 rounded-full border-2 border-white shadow-md pointer-events-none"></div>`,
+              html: `
+                <div class="relative">
+                  <div class="bg-emerald-500 w-4 h-4 rounded-full border-2 border-white shadow-md pointer-events-none"></div>
+                  <div class="absolute top-5 left-1/2 -translate-x-1/2 bg-white px-2 py-1 rounded shadow text-xs font-mono whitespace-nowrap pointer-events-none text-slate-700 font-bold border border-slate-200">
+                    ${hoveredPoint.time ? new Date(hoveredPoint.time).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 
+                      markedTrackId && tracks.find(t => t.id === markedTrackId) ? (() => {
+                        const track = tracks.find(t => t.id === markedTrackId)!;
+                        let dist = 0;
+                        for (let i = 1; i < track.points.length; i++) {
+                          dist += calculateDistance(track.points[i-1], track.points[i]);
+                          if (track.points[i].lat === hoveredPoint.lat && track.points[i].lng === hoveredPoint.lng) break;
+                        }
+                        return `+${Math.floor((dist / estimatedSpeed))}h ${Math.floor(((dist / estimatedSpeed) * 60) % 60)}m`;
+                      })() : ''
+                    }
+                    ${hoveredPoint.hr ? `<br><span class="text-red-500">HF: ${hoveredPoint.hr} bpm</span>` : ''}
+                    ${hoveredPoint.power ? `<br><span class="text-amber-600">P: ${Math.round(hoveredPoint.power)} W</span>` : ''}
+                  </div>
+                </div>
+              `,
               iconSize: [16, 16],
               iconAnchor: [8, 8]
             })} 
