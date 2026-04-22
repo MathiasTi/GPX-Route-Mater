@@ -5,8 +5,10 @@ FROM node:20-slim AS builder
 WORKDIR /app
 
 # Abhängigkeiten kopieren und installieren
-COPY package*.json ./
-RUN npm install
+# WICHTIG: Wir kopieren absichtlich NUR die package.json und NICHT die package-lock.json!
+# Das zwingt npm dazu, die passenden Linux-Abhängigkeiten frisch aufzulösen.
+COPY package.json ./
+RUN npm cache clean --force && npm install
 
 # Quellcode kopieren und Anwendung bauen
 COPY . .
