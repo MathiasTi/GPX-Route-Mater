@@ -1,5 +1,6 @@
-# Build-Stage
-FROM node:20-alpine AS builder
+# Build-Stage: Wir nutzen 'slim' (Debian/glibc) statt 'alpine' (musl). 
+# Das behebt den bekannten Rollup-Architektur-Bug bei ARM64 (Apple Silicon).
+FROM node:20-slim AS builder
 
 WORKDIR /app
 
