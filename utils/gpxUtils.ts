@@ -1,7 +1,7 @@
 
 import { GPXPoint, GPXTrack, PowerStats } from '../types';
 
-export const calculatePowerStats = (points: GPXPoint[]): PowerStats | undefined => {
+export const calculatePowerStats = (points: GPXPoint[], ftp: number = 250): PowerStats | undefined => {
   const powerPoints = points.filter(p => p.power !== undefined && p.time);
   if (powerPoints.length < 2) return undefined;
 
@@ -19,7 +19,7 @@ export const calculatePowerStats = (points: GPXPoint[]): PowerStats | undefined 
     return sum / count;
   });
 
-  // 2. Time-weighted Average Power
+  // 2. Time-weighted Average Power and Work
   let totalEnergy = 0;
   let totalTime = 0;
   for (let i = 1; i < points.length; i++) {
@@ -35,6 +35,7 @@ export const calculatePowerStats = (points: GPXPoint[]): PowerStats | undefined 
     }
   }
   const avgPower = totalTime > 0 ? totalEnergy / totalTime : 0;
+  const work = totalEnergy / 1000; // Joules to kJ (approx 1:1 with food calories for cycling)
 
   // 3. Max Power (from smoothed data)
   const validSmoothed = smoothedPower.filter(p => p !== undefined) as number[];
@@ -42,13 +43,13 @@ export const calculatePowerStats = (points: GPXPoint[]): PowerStats | undefined 
 
   // 4. Best 20s, 1m, 20m using 1s interpolation
   const timedPoints = points.map((p, i) => ({ ...p, power: smoothedPower[i] })).filter(p => p.time && p.power !== undefined);
-  if (timedPoints.length < 2) return { avgPower, maxPower, best20s: avgPower, best1m: avgPower, best20m: avgPower };
+  if (timedPoints.length < 2) return { avgPower, maxPower, best20s: avgPower, best1m: avgPower, best20m: avgPower, work };
 
   const startTime = timedPoints[0].time!.getTime();
   const endTime = timedPoints[timedPoints.length - 1].time!.getTime();
   const durationSec = Math.floor((endTime - startTime) / 1000);
   
-  if (durationSec < 5) return { avgPower, maxPower, best20s: avgPower, best1m: avgPower, best20m: avgPower };
+  if (durationSec < 5) return { avgPower, maxPower, best20s: avgPower, best1m: avgPower, best20m: avgPower, work };
 
   const power1s = new Float32Array(durationSec + 1);
   let pIdx = 0;
@@ -87,12 +88,39 @@ export const calculatePowerStats = (points: GPXPoint[]): PowerStats | undefined 
     return maxSum / window;
   };
 
+  // 5. Normalized Power (NP)
+  // Rolling 30s average, each raised to 4th power, averaged, then 4th root
+  let normalizedPower = avgPower;
+  if (power1s.length >= 30) {
+    let rollingSum30 = 0;
+    for (let i = 0; i < 30; i++) rollingSum30 += power1s[i];
+    
+    let sumPowers = Math.pow(rollingSum30 / 30, 4);
+    let count = 1;
+    
+    for (let i = 30; i < power1s.length; i++) {
+      rollingSum30 += power1s[i] - power1s[i - 30];
+      sumPowers += Math.pow(rollingSum30 / 30, 4);
+      count++;
+    }
+    normalizedPower = Math.pow(sumPowers / count, 0.25);
+  }
+
+  const intensityFactor = normalizedPower / ftp;
+  const tss = (totalTime * normalizedPower * intensityFactor) / (ftp * 36) ; // (s * watts * IF) / (ftp * 3600) * 100
+  const variabilityIndex = avgPower > 0 ? normalizedPower / avgPower : 1;
+
   return {
     avgPower,
     maxPower,
     best20s: getBestRolling(20),
     best1m: getBestRolling(60),
-    best20m: getBestRolling(1200)
+    best20m: getBestRolling(1200),
+    normalizedPower,
+    intensityFactor,
+    tss,
+    variabilityIndex,
+    work
   };
 };
 
@@ -109,6 +137,22 @@ export const calculateDistance = (p1: GPXPoint, p2: GPXPoint): number => {
     Math.sin(dLng / 2) * Math.sin(dLng / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
+};
+
+/**
+ * Calculates the bearing between two points in degrees
+ */
+export const calculateBearing = (p1: GPXPoint, p2: GPXPoint): number => {
+  const lat1 = p1.lat * Math.PI / 180;
+  const lat2 = p2.lat * Math.PI / 180;
+  const lon1 = p1.lng * Math.PI / 180;
+  const lon2 = p2.lng * Math.PI / 180;
+
+  const y = Math.sin(lon2 - lon1) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) -
+            Math.sin(lat1) * Math.cos(lat2) * Math.cos(lon2 - lon1);
+  const θ = Math.atan2(y, x);
+  return (θ * 180 / Math.PI + 360) % 360;
 };
 
 export const calculateElevationStats = (points: GPXPoint[]) => {
@@ -308,7 +352,14 @@ export const parseGPX = (xmlString: string, fileName: string): GPXTrack | null =
         hr = parseInt(hrNode.textContent || "0", 10);
       }
 
-      return { lat, lng, ele, time, power, hr };
+      // Extract Cadence from extensions
+      let cadence: number | undefined;
+      const cadNode = pt.querySelector("cad") || pt.querySelector("extensions cad") || pt.querySelector("trackpointExtension cad") || pt.getElementsByTagNameNS("*", "cad")[0];
+      if (cadNode) {
+        cadence = parseInt(cadNode.textContent || "0", 10);
+      }
+
+      return { lat, lng, ele, time, power, hr, cadence };
     });
 
     const name = xml.querySelector("name")?.textContent || fileName || "Unbenannter Track";

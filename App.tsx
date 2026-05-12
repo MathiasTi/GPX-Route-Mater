@@ -5,9 +5,11 @@ import Map from './components/Map';
 import Map3D from './components/Map3D';
 import ElevationProfile from './components/ElevationProfile';
 import { GPXTrack, GPXPoint, MapLayer } from './types';
-import { parseGPX, mergeTracks, validateGPX } from './utils/gpxUtils';
+import { parseGPX, mergeTracks, validateGPX, calculatePowerStats } from './utils/gpxUtils';
 import { parseFIT } from './utils/fitUtils';
 import { arrayMove } from '@dnd-kit/sortable';
+import AdvancedAnalytics from './components/AdvancedAnalytics';
+import { AnimatePresence } from 'motion/react';
 
 const App: React.FC = () => {
   const [tracks, setTracks] = useState<GPXTrack[]>([]);
@@ -16,6 +18,8 @@ const App: React.FC = () => {
   const [selectionBounds, setSelectionBounds] = useState<{minLat: number, maxLat: number, minLng: number, maxLng: number} | null>(null);
   const [markedTrackId, setMarkedTrackId] = useState<string | null>(null);
   const [is3D, setIs3D] = useState(false);
+  const [ftp, setFtp] = useState(250);
+  const [analyticsOpen, setAnalyticsOpen] = useState(false);
   const [mapView, setMapView] = useState({
     lat: 51.1657,
     lng: 10.4515,
@@ -27,6 +31,17 @@ const App: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [estimatedSpeed, setEstimatedSpeed] = useState(15); // km/h
+  const [isFlying, setIsFlying] = useState(false);
+  const [flyProgress, setFlyProgress] = useState(0); // 0 to 1
+  const [flySpeed, setFlySpeed] = useState(1); // multiplier
+ 
+  // Recalculate power stats when FTP changes
+  useEffect(() => {
+    setTracks(prev => prev.map(track => {
+      const powerStats = calculatePowerStats(track.points, ftp);
+      return { ...track, powerStats };
+    }));
+  }, [ftp]);
 
   const handleToggle3D = useCallback((mode: boolean) => {
     setIs3D(mode);
@@ -36,7 +51,7 @@ const App: React.FC = () => {
       setMapView(prev => ({ ...prev, pitch: 0, bearing: 0 }));
     }
   }, []);
-
+ 
   // Auto-select first track if none is selected and tracks exist
   useEffect(() => {
     if (tracks.length > 0 && !markedTrackId) {
@@ -45,35 +60,36 @@ const App: React.FC = () => {
       setMarkedTrackId(null);
     }
   }, [tracks, markedTrackId]);
-
+ 
   const saveToHistory = useCallback(() => {
     setHistory(prev => [...prev, [...tracks]].slice(-10));
   }, [tracks]);
-
+ 
   const handleUndo = useCallback(() => {
     if (history.length === 0) return;
     const previousState = history[history.length - 1];
     setTracks(previousState);
     setHistory(prev => prev.slice(0, -1));
   }, [history]);
-
+ 
   const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
-
+ 
     setErrorMessage(null);
     const newTracks: GPXTrack[] = [];
     const errors: string[] = [];
-
+ 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const isFit = file.name.toLowerCase().endsWith('.fit');
-
+ 
       try {
         if (isFit) {
           const buffer = await file.arrayBuffer();
           const parsed = await parseFIT(buffer, file.name);
           if (parsed) {
+            parsed.powerStats = calculatePowerStats(parsed.points, ftp);
             newTracks.push(parsed);
           } else {
             errors.push(`${file.name}: Fehler beim Verarbeiten der FIT-Datei.`);
@@ -85,9 +101,10 @@ const App: React.FC = () => {
             errors.push(`${file.name}: ${validation.error}`);
             continue;
           }
-
+ 
           const parsed = parseGPX(text, file.name);
           if (parsed) {
+            parsed.powerStats = calculatePowerStats(parsed.points, ftp);
             newTracks.push(parsed);
           } else {
             errors.push(`${file.name}: Fehler beim Verarbeiten der GPX-Datei.`);
@@ -98,43 +115,95 @@ const App: React.FC = () => {
         console.error(err);
       }
     }
-
+ 
     if (errors.length > 0) {
       setErrorMessage(errors.join("\n"));
       // Clear error after 5 seconds
       setTimeout(() => setErrorMessage(null), 5000);
     }
-
+ 
     if (newTracks.length > 0) {
       saveToHistory();
       setTracks(prev => [...prev, ...newTracks]);
     }
     e.target.value = '';
   }, [saveToHistory]);
-
+ 
   const toggleVisibility = useCallback((id: string) => {
     setTracks(prev => prev.map(t => t.id === id ? { ...t, visible: !t.visible } : t));
   }, []);
-
+ 
   const removeTrack = useCallback((id: string) => {
     saveToHistory();
     setTracks(prev => prev.filter(t => t.id !== id));
     if (markedTrackId === id) setMarkedTrackId(null);
   }, [saveToHistory, markedTrackId]);
-
+ 
   const handleMerge = useCallback(() => {
     if (tracks.length < 2) return;
     saveToHistory();
     const merged = mergeTracks(tracks);
+    merged.powerStats = calculatePowerStats(merged.points, ftp);
     setTracks([merged]);
     setMarkedTrackId(merged.id);
   }, [tracks, saveToHistory]);
-
+ 
   const handleReorder = useCallback((oldIndex: number, newIndex: number) => {
     setTracks(prev => arrayMove(prev, oldIndex, newIndex));
   }, []);
-
+ 
   const markedTrack = tracks.find(t => t.id === markedTrackId);
+  const suggestedFtp = markedTrack?.powerStats?.best20m ? Math.round(markedTrack.powerStats.best20m * 0.95) : null;
+ 
+  // Flyover Animation Logic
+  useEffect(() => {
+    let animationFrame: number;
+    let lastTimestamp = 0;
+    
+    const animate = (timestamp: number) => {
+      if (isFlying && markedTrack) {
+        if (!lastTimestamp) lastTimestamp = timestamp;
+        const delta = timestamp - lastTimestamp;
+        lastTimestamp = timestamp;
+
+        setFlyProgress(prev => {
+          // Consistent speed: base speed increased for better scaling
+          // 150km/h base provides better range up to 1500km/h at 10x
+          const targetSpeedKmh = 150 * flySpeed;
+          const targetSpeedKmMs = targetSpeedKmh / 3600000;
+          const distanceStep = targetSpeedKmMs * delta;
+          const progressStep = distanceStep / (markedTrack.distance || 1);
+          
+          const next = prev + progressStep;
+          if (next >= 1) {
+            setIsFlying(false);
+            return 0;
+          }
+          return next;
+        });
+      }
+      animationFrame = requestAnimationFrame(animate);
+    };
+    
+    if (isFlying) {
+      animationFrame = requestAnimationFrame(animate);
+    }
+    
+    return () => {
+      cancelAnimationFrame(animationFrame);
+      lastTimestamp = 0;
+    };
+  }, [isFlying, markedTrack, flySpeed]);
+
+  // Sync flyProgress to hoveredPoint
+  useEffect(() => {
+    if (isFlying && markedTrack && markedTrack.points.length > 0) {
+      const index = Math.floor(flyProgress * (markedTrack.points.length - 1));
+      const point = markedTrack.points[index];
+      // Only update if the point actually changed to avoid redundant renders
+      setHoveredPoint(prev => prev === point ? prev : point);
+    }
+  }, [flyProgress, isFlying, markedTrack]);
 
   const [showHint, setShowHint] = useState(true);
 
@@ -159,6 +228,10 @@ const App: React.FC = () => {
         onToggleCollapse={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
         estimatedSpeed={estimatedSpeed}
         setEstimatedSpeed={setEstimatedSpeed}
+        ftp={ftp}
+        setFtp={setFtp}
+        suggestedFtp={suggestedFtp}
+        onOpenAnalytics={() => setAnalyticsOpen(true)}
       />
       <main className="flex-1 flex flex-col relative overflow-hidden">
         <div className="flex-1 relative">
@@ -175,6 +248,8 @@ const App: React.FC = () => {
               mapView={mapView}
               onMapViewChange={setMapView}
               estimatedSpeed={estimatedSpeed}
+              flySpeed={flySpeed}
+              isFlying={isFlying}
             />
           ) : (
             <Map 
@@ -189,8 +264,20 @@ const App: React.FC = () => {
               mapView={mapView}
               onMapViewChange={setMapView}
               estimatedSpeed={estimatedSpeed}
+              isFlying={isFlying}
             />
           )}
+
+          <AnimatePresence>
+            {analyticsOpen && markedTrack && (
+              <AdvancedAnalytics 
+                track={markedTrack} 
+                ftp={ftp} 
+                selectionBounds={selectionBounds}
+                onClose={() => setAnalyticsOpen(false)} 
+              />
+            )}
+          </AnimatePresence>
           
           {showHint && (
             <div 
@@ -248,6 +335,19 @@ const App: React.FC = () => {
               selectionBounds={selectionBounds}
               onSelection={setSelectionBounds}
               estimatedSpeed={estimatedSpeed}
+              isFlying={isFlying}
+              flySpeed={flySpeed}
+              onFlySpeedChange={setFlySpeed}
+              onOpenAnalytics={() => setAnalyticsOpen(true)}
+              ftp={ftp}
+              onToggleFlyover={() => {
+                if (isFlying) {
+                  setIsFlying(false);
+                } else {
+                  setFlyProgress(0);
+                  setIsFlying(true);
+                }
+              }}
             />
           </div>
         )}

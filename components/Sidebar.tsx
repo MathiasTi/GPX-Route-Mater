@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { GPXTrack, MapLayer } from '../types';
-import { Upload, Trash2, Combine, Eye, EyeOff, Ruler, Layers, GripVertical, Undo2, TrendingUp, TrendingDown, Box, ChevronLeft, ChevronRight, Menu, Zap, Clock } from 'lucide-react';
+import { Upload, Trash2, Combine, Eye, EyeOff, Ruler, Layers, GripVertical, Undo2, TrendingUp, TrendingDown, Box, ChevronLeft, ChevronRight, Menu, Zap, Clock, BarChart2 } from 'lucide-react';
 import { 
   DndContext, 
   closestCenter, 
@@ -26,9 +26,10 @@ interface TrackItemProps {
   onToggleVisibility: (id: string) => void;
   onRemoveTrack: (id: string) => void;
   estimatedSpeed: number;
+  onOpenAnalytics?: (id: string) => void;
 }
 
-const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, onToggleVisibility, onRemoveTrack, estimatedSpeed }) => {
+const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, onToggleVisibility, onRemoveTrack, estimatedSpeed, onOpenAnalytics }) => {
   const {
     attributes,
     listeners,
@@ -87,11 +88,10 @@ const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, 
             {track.powerStats && (
               <div className="text-[10px] text-amber-600 flex flex-wrap items-center gap-x-2 gap-y-0.5 font-mono mt-1 pt-1 border-t border-slate-100">
                 <Zap className="w-3 h-3 shrink-0" />
-                <span title="Durchschnittliche Leistung">Ø {Math.round(track.powerStats.avgPower).toLocaleString('de-DE')}W</span>
-                <span title="Maximale Leistung">Max {Math.round(track.powerStats.maxPower).toLocaleString('de-DE')}W</span>
-                <span title="Beste 20 Sekunden">20s {Math.round(track.powerStats.best20s).toLocaleString('de-DE')}W</span>
-                <span title="Beste 1 Minute">1m {Math.round(track.powerStats.best1m).toLocaleString('de-DE')}W</span>
-                <span title="Beste 20 Minuten">20m {Math.round(track.powerStats.best20m).toLocaleString('de-DE')}W</span>
+                <span title="Normalized Power" className="font-bold">NP {Math.round(track.powerStats.normalizedPower || 0)}W</span>
+                <span title="Intensity Factor">IF {(track.powerStats.intensityFactor || 0).toFixed(2)}</span>
+                <span title="Training Stress Score">TSS {Math.round(track.powerStats.tss || 0)}</span>
+                <span title="Arbeit">Work {Math.round(track.powerStats.work || 0)}kJ</span>
               </div>
             )}
             {track.surfaceStats && track.surfaceStats.length > 0 && (
@@ -106,20 +106,31 @@ const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, 
           </div>
         </div>
 
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+        <div className="flex flex-col gap-1 items-center bg-slate-50 rounded p-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
           <button 
             onClick={(e) => { e.stopPropagation(); onToggleVisibility(track.id); }} 
-            className="p-1.5 hover:bg-slate-100 rounded text-slate-500 transition-colors" 
+            className="p-1 hover:bg-slate-200 rounded text-slate-500 transition-colors" 
             title="Sichtbarkeit umschalten"
           >
-            {track.visible ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+            {track.visible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
           </button>
+          
+          {track.powerStats && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); onOpenAnalytics?.(track.id); }} 
+              className="p-1 hover:bg-indigo-100 rounded text-indigo-600 transition-colors" 
+              title="Erweiterte Analyse"
+            >
+              <BarChart2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+
           <button 
             onClick={(e) => { e.stopPropagation(); onRemoveTrack(track.id); }} 
-            className="p-1.5 hover:bg-red-50 rounded text-red-500 transition-colors" 
+            className="p-1 hover:bg-red-100 rounded text-red-500 transition-colors" 
             title="Track entfernen"
           >
-            <Trash2 className="w-4 h-4" />
+            <Trash2 className="w-3.5 h-3.5" />
           </button>
         </div>
       </div>
@@ -146,6 +157,10 @@ interface SidebarProps {
   onToggleCollapse: () => void;
   estimatedSpeed: number;
   setEstimatedSpeed: (speed: number) => void;
+  ftp: number;
+  setFtp: (ftp: number) => void;
+  suggestedFtp: number | null;
+  onOpenAnalytics: (id: string) => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ 
@@ -166,7 +181,11 @@ const Sidebar: React.FC<SidebarProps> = ({
   isCollapsed,
   onToggleCollapse,
   estimatedSpeed,
-  setEstimatedSpeed
+  setEstimatedSpeed,
+  ftp,
+  setFtp,
+  suggestedFtp,
+  onOpenAnalytics
 }) => {
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -333,6 +352,41 @@ const Sidebar: React.FC<SidebarProps> = ({
             )}
 
             <section className="space-y-3">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Nutzer-FTP</h2>
+                <span className="text-xs font-bold text-amber-600">{ftp} W</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <input 
+                  type="range" 
+                  min="100" 
+                  max="500" 
+                  step="5" 
+                  value={ftp} 
+                  onChange={(e) => setFtp(Number(e.target.value))}
+                  className="flex-1 accent-amber-500"
+                />
+                <input 
+                  type="number"
+                  value={ftp}
+                  onChange={(e) => setFtp(Number(e.target.value))}
+                  className="w-16 bg-white border border-slate-200 rounded px-1.5 py-1 text-xs font-mono font-bold text-slate-700"
+                />
+              </div>
+              <div className="flex justify-between items-center gap-2">
+                <p className="text-[10px] text-slate-500">Basis für NP, IF und TSS Berechnungen.</p>
+                {suggestedFtp && Math.abs(suggestedFtp - ftp) > 2 && (
+                  <button 
+                    onClick={() => setFtp(suggestedFtp)}
+                    className="text-[9px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-black hover:bg-amber-200 transition-colors animate-pulse"
+                  >
+                    Vorschlag: {suggestedFtp}W
+                  </button>
+                )}
+              </div>
+            </section>
+
+            <section className="space-y-3">
               <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Routen ({tracks.length})</h2>
               <div className="space-y-2 pb-6">
                 {tracks.length === 0 && (
@@ -357,6 +411,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                           onToggleVisibility={onToggleVisibility} 
                           onRemoveTrack={onRemoveTrack} 
                           estimatedSpeed={estimatedSpeed}
+                          onOpenAnalytics={onOpenAnalytics}
                         />
                       ))}
                     </div>

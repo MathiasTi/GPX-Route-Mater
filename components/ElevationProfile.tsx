@@ -10,6 +10,12 @@ interface ElevationProfileProps {
   selectionBounds?: {minLat: number, maxLat: number, minLng: number, maxLng: number} | null;
   onSelection?: (bounds: {minLat: number, maxLat: number, minLng: number, maxLng: number} | null) => void;
   estimatedSpeed?: number;
+  isFlying?: boolean;
+  flySpeed?: number;
+  onFlySpeedChange?: (speed: number) => void;
+  onToggleFlyover?: () => void;
+  onOpenAnalytics?: () => void;
+  ftp: number;
 }
 
 interface HoverInfo {
@@ -23,14 +29,26 @@ interface HoverInfo {
   y: number;
 }
 
-const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint, hoveredPoint, selectionBounds, onSelection, estimatedSpeed = 15 }) => {
+const ElevationProfile: React.FC<ElevationProfileProps> = ({ 
+  track, 
+  onHoverPoint, 
+  hoveredPoint, 
+  selectionBounds, 
+  onSelection, 
+  estimatedSpeed = 15,
+  isFlying = false,
+  flySpeed = 1,
+  onFlySpeedChange,
+  onToggleFlyover,
+  onOpenAnalytics,
+  ftp
+}) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo | null>(null);
   const [isSmoothed, setIsSmoothed] = useState(false);
   const [showElevation, setShowElevation] = useState(true);
   const [showPower, setShowPower] = useState(true);
   const [showHr, setShowHr] = useState(true);
-  const [ftp, setFtp] = useState(210);
   const [dragStartX, setDragStartX] = useState<number | null>(null);
   const [dragCurrentX, setDragCurrentX] = useState<number | null>(null);
   const [showSelectedSurfaceStats, setShowSelectedSurfaceStats] = useState(true);
@@ -240,8 +258,9 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
       x,
       y
     });
-    if (onHoverPoint) {
-      onHoverPoint({ lat: point.lat, lng: point.lng, ele: point.ele, time: point.time, power: point.power, hr: point.hr });
+    if (onHoverPoint && !isFlying) {
+      const originalPoint = track.points[closestIdx];
+      onHoverPoint(originalPoint);
     }
   };
 
@@ -303,8 +322,9 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
       x,
       y
     });
-    if (onHoverPoint) {
-      onHoverPoint({ lat: point.lat, lng: point.lng, ele: point.ele, time: point.time, power: point.power, hr: point.hr });
+    if (onHoverPoint && !isFlying) {
+      const originalPoint = track.points[closestIdx];
+      onHoverPoint(originalPoint);
     }
   };
 
@@ -519,6 +539,48 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
           </h3>
         </div>
         <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-full border border-slate-200">
+            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tighter">Tempo:</span>
+            <input 
+              type="range" 
+              min="0.5" 
+              max="10" 
+              step="0.5" 
+              value={flySpeed} 
+              onChange={(e) => onFlySpeedChange?.(parseFloat(e.target.value))}
+              className="w-24 h-1.5 bg-indigo-100 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+            />
+            <span className="text-[10px] font-bold text-indigo-700 w-4">{flySpeed}x</span>
+          </div>
+          <button
+            onClick={onToggleFlyover}
+            className={`flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold transition-all ${
+              isFlying 
+                ? 'bg-rose-500 text-white shadow-lg shadow-rose-200 hover:bg-rose-600 scale-105' 
+                : 'bg-indigo-600 text-white shadow-lg shadow-indigo-200 hover:bg-indigo-700'
+            }`}
+          >
+            {isFlying ? (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                Stoppen
+              </>
+            ) : (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="m7 3 14 9-14 9z"/></svg>
+                Überflug
+              </>
+            )}
+          </button>
+          {track.powerStats && (
+            <button
+              onClick={onOpenAnalytics}
+              className="flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-amber-500 text-white shadow-lg shadow-amber-200 hover:bg-amber-600 transition-all"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+              Analyse
+            </button>
+          )}
           <div className="flex items-center gap-3 mr-2">
             <label className="flex items-center gap-1.5 cursor-pointer text-[11px] font-bold text-slate-500 hover:text-slate-700 transition-colors uppercase tracking-wider">
               <input 
@@ -567,15 +629,9 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
           {profileData.hasPower && (
             <div className="flex items-center gap-2 ml-2">
               <label className="text-[10px] font-bold text-slate-500 tracking-wider">FTP:</label>
-              <input 
-                type="range" 
-                min="150" 
-                max="350" 
-                value={ftp} 
-                onChange={(e) => setFtp(parseInt(e.target.value, 10))}
-                className="w-20 h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-amber-500"
-              />
-              <span className="text-xs font-bold text-slate-700 w-7">{ftp}</span>
+              <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-2 py-0.5 shadow-sm">
+                <span className="text-xs font-bold text-slate-700 w-10 text-center">{ftp}W</span>
+              </div>
             </div>
           )}
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] font-bold font-mono text-slate-500 bg-slate-50 px-3 py-1 rounded-full border border-slate-100 shadow-sm">
@@ -891,81 +947,110 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({ track, onHoverPoint
               
               {(() => {
                 const hasPower = hoverInfo.power !== undefined && showPower;
+                const hasHr = hoverInfo.hr !== undefined && showHr;
                 const hasTime = hoverInfo.time !== undefined;
-                let boxHeight = 40;
-                if (hasPower) boxHeight += 12;
-                if (hoverInfo.hr !== undefined && showHr) boxHeight += 12;
-                boxHeight += 12; // Always show time or estimated time
                 
-                let currentY = hoverInfo.y - 45 < 5 ? hoverInfo.y + 30 : hoverInfo.y - 30;
+                // Calculate dynamic box dimensions
+                let boxHeight = 70; // Base: Distance/Slope + Height
+                if (hasPower) boxHeight += 16;
+                if (hasHr) boxHeight += 16;
+                if (hasTime || profileData.duration) boxHeight += 16;
+                
+                const boxWidth = 140;
+                const isLeftEdge = hoverInfo.x < boxWidth + 20;
+                const tooltipX = isLeftEdge ? hoverInfo.x + 15 : hoverInfo.x - boxWidth - 15;
+                const tooltipY = Math.max(padding.top, Math.min(height - padding.bottom - boxHeight, hoverInfo.y - boxHeight / 2));
                 
                 return (
-                  <>
+                  <g className="transition-all duration-75">
+                    {/* Tooltip Background */}
                     <rect 
-                      x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 120 : hoverInfo.x + 10} 
-                      y={hoverInfo.y - 45 < 5 ? hoverInfo.y + 15 : hoverInfo.y - 45} 
-                      width="120" 
+                      x={tooltipX} 
+                      y={tooltipY} 
+                      width={boxWidth} 
                       height={boxHeight} 
-                      rx="6" 
-                      fill="white" 
-                      stroke="#e2e8f0" 
+                      rx="8" 
+                      fill="rgba(15, 23, 42, 0.95)" 
+                      stroke="rgba(255, 255, 255, 0.1)"
                       filter="url(#shadow)"
                     />
                     
+                    {/* Tooltip Header: Distance */}
                     <text 
-                      x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
-                      y={currentY} 
-                      className="text-[10px] font-bold fill-slate-700 font-mono"
+                      x={tooltipX + 10} 
+                      y={tooltipY + 18} 
+                      className="text-[11px] font-bold fill-white font-mono"
                     >
-                      Höhe: {hoverInfo.ele.toLocaleString('de-DE', { maximumFractionDigits: 0 })}m
+                      {hoverInfo.dist.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} km
                     </text>
-                    
-                    {hasPower && (
-                      <text 
-                        x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
-                        y={currentY += 12} 
-                        className="text-[10px] font-bold fill-amber-600 font-mono"
-                      >
-                        Leistung: {hoverInfo.power!.toLocaleString('de-DE', { maximumFractionDigits: 0 })}W
-                      </text>
-                    )}
-
-                    {hoverInfo.hr !== undefined && showHr && (
-                      <text 
-                        x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
-                        y={currentY += 12} 
-                        className="text-[10px] font-bold fill-red-500 font-mono"
-                      >
-                        HF: {hoverInfo.hr.toLocaleString('de-DE', { maximumFractionDigits: 0 })} bpm
-                      </text>
-                    )}
-
-                    {hasTime ? (
-                      <text 
-                        x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
-                        y={currentY += 12} 
-                        className="text-[10px] font-bold fill-blue-600 font-mono"
-                      >
-                        Zeit: {new Date(hoverInfo.time!).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                      </text>
-                    ) : (
-                      <text 
-                        x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
-                        y={currentY += 12} 
-                        className="text-[10px] font-bold fill-blue-600 font-mono"
-                      >
-                        Zeit: +{Math.floor((hoverInfo.dist / estimatedSpeed))}h {Math.floor(((hoverInfo.dist / estimatedSpeed) * 60) % 60)}m
-                      </text>
-                    )}
-                    
                     <text 
-                      x={hoverInfo.x + 10 > width - 110 ? hoverInfo.x - 115 : hoverInfo.x + 15} 
-                      y={currentY += 12} 
-                      className="text-[9px] fill-slate-500 font-mono"
+                      x={tooltipX + boxWidth - 10} 
+                      y={tooltipY + 18} 
+                      textAnchor="end"
+                      className={`text-[10px] font-bold font-mono ${hoverInfo.slope > 0 ? 'fill-emerald-400' : hoverInfo.slope < 0 ? 'fill-rose-400' : 'fill-slate-400'}`}
                     >
-                      {hoverInfo.dist.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}km | {hoverInfo.slope.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                      {hoverInfo.slope.toLocaleString('de-DE', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
                     </text>
-                  </>
+
+                    {/* Divider */}
+                    <line 
+                      x1={tooltipX + 8} 
+                      y1={tooltipY + 24} 
+                      x2={tooltipX + boxWidth - 8} 
+                      y2={tooltipY + 24} 
+                      stroke="rgba(255, 255, 255, 0.1)" 
+                      strokeWidth="1" 
+                    />
+
+                    {/* Data Rows */}
+                    <g transform={`translate(${tooltipX + 10}, ${tooltipY + 38})`}>
+                      {/* Height Row */}
+                      <g>
+                        <text className="text-[10px] fill-slate-400">Höhe:</text>
+                        <text x={boxWidth - 20} textAnchor="end" className="text-[10px] font-bold fill-white">
+                          {hoverInfo.ele.toLocaleString('de-DE', { maximumFractionDigits: 0 })} m
+                        </text>
+                      </g>
+
+                      {/* Power Row */}
+                      {hasPower && (
+                        <g transform="translate(0, 16)">
+                          <text className="text-[10px] fill-amber-400">Leistung:</text>
+                          <text x={boxWidth - 20} textAnchor="end" className="text-[10px] font-bold fill-white">
+                            {hoverInfo.power!.toLocaleString('de-DE', { maximumFractionDigits: 0 })} W
+                          </text>
+                        </g>
+                      )}
+
+                      {/* HR Row */}
+                      {hasHr && (
+                        <g transform={`translate(0, ${hasPower ? 32 : 16})`}>
+                          <text className="text-[10px] fill-rose-500">HF:</text>
+                          <text x={boxWidth - 20} textAnchor="end" className="text-[10px] font-bold fill-white">
+                            {hoverInfo.hr!.toLocaleString('de-DE', { maximumFractionDigits: 0 })} bpm
+                          </text>
+                        </g>
+                      )}
+
+                      {/* Time Row */}
+                      <g transform={`translate(0, ${(hasPower ? 16 : 0) + (hasHr ? 16 : 0) + 16})`}>
+                        <text className="text-[10px] fill-blue-400">Zeit:</text>
+                        <text x={boxWidth - 20} textAnchor="end" className="text-[10px] font-bold fill-white">
+                          {hasTime ? (
+                            new Date(hoverInfo.time!).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                          ) : (
+                            `+${Math.floor((hoverInfo.dist / estimatedSpeed))}h ${Math.floor(((hoverInfo.dist / estimatedSpeed) * 60) % 60)}m`
+                          )}
+                        </text>
+                      </g>
+                    </g>
+
+                    {/* Tooltip Arrow */}
+                    <path 
+                      d={isLeftEdge ? `M${tooltipX},${hoverInfo.y} L${tooltipX + 6},${hoverInfo.y - 4} L${tooltipX + 6},${hoverInfo.y + 4} Z` : `M${tooltipX + boxWidth},${hoverInfo.y} L${tooltipX + boxWidth - 6},${hoverInfo.y - 4} L${tooltipX + boxWidth - 6},${hoverInfo.y + 4} Z`}
+                      fill="rgba(15, 23, 42, 0.95)"
+                    />
+                  </g>
                 );
               })()}
             </g>

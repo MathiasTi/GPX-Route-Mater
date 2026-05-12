@@ -1,5 +1,5 @@
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { MapContainer, TileLayer, Polyline, useMapEvents, useMap, Marker, Popup, Rectangle } from 'react-leaflet';
 import L from 'leaflet';
 import { GPXTrack, MapLayer, MAP_LAYERS, GPXPoint } from '../types';
@@ -26,6 +26,7 @@ interface MapProps {
   mapView: {lat: number, lng: number, zoom: number, pitch?: number, bearing?: number};
   onMapViewChange: (view: {lat: number, lng: number, zoom: number, pitch: number, bearing: number}) => void;
   estimatedSpeed?: number;
+  isFlying?: boolean;
 }
 
 const ZoomToTracks = ({ tracks }: { tracks: GPXTrack[] }) => {
@@ -71,32 +72,72 @@ const MapResizer = ({ markedTrackId, tracksLength }: { markedTrackId: string | n
   return null;
 };
 
-const SyncView = ({ mapView, onMapViewChange }: { mapView: any, onMapViewChange: any }) => {
+const FlyoverFollow = ({ point, active }: { point: GPXPoint | null, active: boolean }) => {
   const map = useMap();
-  
-  // Sync map instance to mapView prop (only when switching or external change)
+  const lastTargetRef = useRef<[number, number] | null>(null);
+
   useEffect(() => {
+    if (active && point) {
+      // Use a smaller threshold for following during flight to ensure smoothness
+      const isSignificant = !lastTargetRef.current || 
+        Math.abs(lastTargetRef.current[0] - point.lat) > 0.00005 ||
+        Math.abs(lastTargetRef.current[1] - point.lng) > 0.00005;
+
+      if (isSignificant) {
+        lastTargetRef.current = [point.lat, point.lng];
+        // Short duration prevents animation queue buildup
+        map.panTo([point.lat, point.lng], { animate: true, duration: 0.3, easeLinearity: 0.1 });
+      }
+    }
+  }, [point, active, map]);
+  return null;
+};
+
+const SyncView = ({ mapView, onMapViewChange, isFlying }: { mapView: any, onMapViewChange: any, isFlying: boolean }) => {
+  const map = useMap();
+  const isInternalUpdate = useRef(false);
+  
+  // Sync map instance to mapView prop (only when external change)
+  useEffect(() => {
+    if (isFlying || isInternalUpdate.current) {
+      isInternalUpdate.current = false;
+      return;
+    }
+    
     const currentCenter = map.getCenter();
     const currentZoom = map.getZoom();
     
-    if (Math.abs(currentCenter.lat - mapView.lat) > 0.0001 || 
-        Math.abs(currentCenter.lng - mapView.lng) > 0.0001 || 
-        Math.abs(currentZoom - mapView.zoom) > 0.1) {
+    const isDifferent = 
+        Math.abs(currentCenter.lat - mapView.lat) > 0.001 || 
+        Math.abs(currentCenter.lng - mapView.lng) > 0.001 || 
+        Math.abs(currentZoom - mapView.zoom) > 0.2;
+
+    if (isDifferent) {
       map.setView([mapView.lat, mapView.lng], mapView.zoom, { animate: false });
     }
-  }, [mapView.lat, mapView.lng, mapView.zoom, map]);
+  }, [mapView.lat, mapView.lng, mapView.zoom, map, isFlying]);
 
   useMapEvents({
     moveend() {
+      if (isFlying) return;
       const center = map.getCenter();
       const zoom = map.getZoom();
-      onMapViewChange({
-        lat: center.lat,
-        lng: center.lng,
-        zoom: zoom,
-        pitch: 0,
-        bearing: 0
-      });
+      
+      const isSignificant =
+        Math.abs(center.lat - mapView.lat) > 0.001 ||
+        Math.abs(center.lng - mapView.lng) > 0.001 ||
+        Math.abs(zoom - mapView.zoom) > 0.2;
+
+      if (isSignificant) {
+        isInternalUpdate.current = true;
+        onMapViewChange({
+          lat: center.lat,
+          lng: center.lng,
+          zoom: zoom,
+          pitch: 0,
+          bearing: 0
+        });
+      }
     }
   });
 
@@ -213,7 +254,7 @@ const SelectionTool = ({ active, onSelection, currentBounds }: { active: boolean
   );
 };
 
-const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTrack, hoveredPoint, onHoverPoint, selectionBounds, onSelection, mapView, onMapViewChange, estimatedSpeed = 15 }) => {
+const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTrack, hoveredPoint, onHoverPoint, selectionBounds, onSelection, mapView, onMapViewChange, estimatedSpeed = 15, isFlying = false }) => {
   const layer = MAP_LAYERS[activeLayer];
 
   return (
@@ -380,7 +421,8 @@ const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTra
         <ZoomToTracks tracks={tracks} />
         <ZoomToSelection bounds={selectionBounds} />
         <MapResizer markedTrackId={markedTrackId} tracksLength={tracks.length} />
-        <SyncView mapView={mapView} onMapViewChange={onMapViewChange} />
+        <FlyoverFollow point={hoveredPoint || null} active={isFlying} />
+        <SyncView mapView={mapView} onMapViewChange={onMapViewChange} isFlying={isFlying} />
         <SelectionTool active={true} onSelection={onSelection} currentBounds={selectionBounds} />
         
         {hoveredPoint && (

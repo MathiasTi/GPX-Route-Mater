@@ -6,6 +6,7 @@ export interface GPXPoint {
   time?: Date;
   power?: number;
   hr?: number;
+  cadence?: number;
 }
 
 export interface PowerStats {
@@ -14,6 +15,11 @@ export interface PowerStats {
   best20s: number;
   best1m: number;
   best20m: number;
+  normalizedPower?: number;
+  intensityFactor?: number;
+  tss?: number;
+  variabilityIndex?: number;
+  work?: number; // in kJ
 }
 
 export interface SurfaceSegment {

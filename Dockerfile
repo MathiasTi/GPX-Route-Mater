@@ -14,18 +14,25 @@ RUN npm cache clean --force && npm install
 COPY . .
 RUN npm run build
 
-# Production-Stage (Nginx)
+# Production-Stage (Nginx mit Certbot)
 FROM nginx:alpine
 
-# Standard-Nginx-Konfiguration entfernen und eigene hinzufügen
+# Certbot, Nginx-Plugin für Certbot und bash installieren
+RUN apk add --no-cache certbot certbot-nginx bash
+
+# Alte Config entfernen und durch unsere austauschen
 RUN rm /etc/nginx/conf.d/default.conf
-COPY nginx.conf /etc/nginx/conf.d/
+COPY nginx.conf /etc/nginx/conf.d/nginx.conf
+
+# Start-Skript für Let's Encrypt Logik kopieren
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Gebaute Dateien aus der Build-Stage kopieren
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Port freigeben
-EXPOSE 80
+# Port 80 (HTTP) und 443 (HTTPS) nach außen freigeben
+EXPOSE 80 443
 
-# Nginx im Vordergrund starten
-CMD ["nginx", "-g", "daemon off;"]
+# Entrypoint führt Skript aus
+CMD ["/entrypoint.sh"]

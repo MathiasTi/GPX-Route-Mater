@@ -2,6 +2,7 @@ import React, { useMemo, useEffect, useRef, useState } from 'react';
 import Map, { Source, Layer, MapRef, NavigationControl, Marker, Popup } from 'react-map-gl/maplibre';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { GPXTrack, MapLayer, MAP_LAYERS, GPXPoint } from '../types';
+import { calculateBearing } from '../utils/gpxUtils';
 
 interface Map3DProps {
   tracks: GPXTrack[];
@@ -15,13 +16,25 @@ interface Map3DProps {
   mapView: {lat: number, lng: number, zoom: number, pitch: number, bearing: number};
   onMapViewChange: (view: {lat: number, lng: number, zoom: number, pitch: number, bearing: number}) => void;
   estimatedSpeed?: number;
+  flySpeed?: number;
+  isFlying?: boolean;
 }
 
-const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMarkTrack, hoveredPoint, onHoverPoint, selectionBounds, onSelection, mapView, onMapViewChange, estimatedSpeed = 15 }) => {
+const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMarkTrack, hoveredPoint, onHoverPoint, selectionBounds, onSelection, mapView, onMapViewChange, estimatedSpeed = 15, flySpeed = 1, isFlying = false }) => {
   const mapRef = useRef<MapRef>(null);
   const layerConfig = MAP_LAYERS[activeLayer];
   const [pitch, setPitch] = useState(mapView.pitch);
   const [bearing, setBearing] = useState(mapView.bearing);
+  const lastTargetRef = useRef<{lat: number, lng: number, bearing: number} | null>(null);
+  const isInternalUpdateRef = useRef(false);
+
+  // Sync internal state when external mapView changes significantly
+  useEffect(() => {
+    if (!isFlying && !isInternalUpdateRef.current) {
+      if (Math.abs(pitch - mapView.pitch) > 0.1) setPitch(mapView.pitch);
+      if (Math.abs(bearing - mapView.bearing) > 0.1) setBearing(mapView.bearing);
+    }
+  }, [mapView.pitch, mapView.bearing, isFlying]);
 
   const mapStyle = useMemo(() => {
     const tileUrls = ['a', 'b', 'c'].map(s => layerConfig.url.replace('{s}', s));
@@ -121,6 +134,59 @@ const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMar
   }, [selectionBounds]);
 
   useEffect(() => {
+    if (isFlying && hoveredPoint && mapRef.current && markedTrackId) {
+      const map = mapRef.current.getMap();
+      const track = tracks.find(t => t.id === markedTrackId);
+      if (track) {
+        // Find current index to look ahead for bearing
+        const idx = track.points.findIndex(p => p.lat === hoveredPoint.lat && p.lng === hoveredPoint.lng);
+        let nextBearing = bearing;
+        
+        if (idx !== -1 && idx < track.points.length - 1) {
+          // Look ahead for bearing - dynamic based on speed to ensure smoothness
+          // We look ahead more points at higher speeds to maintain stable bearing
+          const lookAheadPoints = Math.max(10, Math.floor(15 * flySpeed)); 
+          const lookAheadIdx = Math.min(idx + lookAheadPoints, track.points.length - 1);
+          const lookAheadPoint = track.points[lookAheadIdx];
+          nextBearing = calculateBearing(hoveredPoint, lookAheadPoint);
+        }
+
+        // Avoid redundant easeTo calls if targets are nearly identical to save CPU and avoid flicker
+        const isSignificantChange = !lastTargetRef.current || 
+          Math.abs(lastTargetRef.current.lat - hoveredPoint.lat) > 0.00002 ||
+          Math.abs(lastTargetRef.current.lng - hoveredPoint.lng) > 0.00002 ||
+          Math.abs(lastTargetRef.current.bearing - nextBearing) > 0.5;
+
+        if (isSignificantChange) {
+          lastTargetRef.current = { lat: hoveredPoint.lat, lng: hoveredPoint.lng, bearing: nextBearing };
+          isInternalUpdateRef.current = true;
+          
+          // Use easeTo for cinematic movement
+          map.easeTo({
+            center: [hoveredPoint.lng, hoveredPoint.lat],
+            bearing: nextBearing,
+            pitch: 65, // Tilt for 3D effect
+            zoom: 16.5,
+            duration: 400, // Shorter duration for more responsive tracking at high speeds
+            easing: (t) => t // Linear easing for consistent flow during flight
+          });
+          
+          // Only update UI state occasionally or if significant to minimize re-renders
+          if (Math.abs(bearing - nextBearing) > 2.0) {
+            setBearing(nextBearing);
+          }
+          
+          // Reset internal update flag after a delay
+          const timeout = setTimeout(() => { 
+            isInternalUpdateRef.current = false; 
+          }, 450);
+          return () => clearTimeout(timeout);
+        }
+      }
+    }
+  }, [hoveredPoint, isFlying, markedTrackId, tracks]);
+
+  useEffect(() => {
     // Wait for CSS transitions (like the elevation profile opening) to finish
     const timeout = setTimeout(() => {
       if (mapRef.current) {
@@ -204,17 +270,36 @@ const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMar
         maxPitch={75}
         mapStyle={mapStyle}
         onMove={(e) => {
+          if (isFlying) return;
           setPitch(e.viewState.pitch);
           setBearing(e.viewState.bearing);
         }}
         onMoveEnd={(e) => {
-          onMapViewChange({
+          if (isFlying || isInternalUpdateRef.current) {
+            isInternalUpdateRef.current = false;
+            return;
+          }
+          
+          const newView = {
             lat: e.viewState.latitude,
             lng: e.viewState.longitude,
             zoom: e.viewState.zoom,
             pitch: e.viewState.pitch,
             bearing: e.viewState.bearing
-          });
+          };
+          
+          // Only propagate change back to parent if it's significant to avoid loops
+          const isSignificant = 
+            Math.abs(newView.lat - mapView.lat) > 0.001 ||
+            Math.abs(newView.lng - mapView.lng) > 0.001 ||
+            Math.abs(newView.zoom - mapView.zoom) > 0.2 ||
+            Math.abs(newView.pitch - mapView.pitch) > 1.0 ||
+            Math.abs(newView.bearing - mapView.bearing) > 1.0;
+
+          if (isSignificant) {
+            isInternalUpdateRef.current = true;
+            onMapViewChange(newView);
+          }
         }}
         interactiveLayerIds={visibleTracks.map(t => `track-${t.id}-click`)}
         onClick={(e) => {
@@ -274,8 +359,8 @@ const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMar
                       paint: {
                         'line-color': track.color || '#ff0000',
                         'line-width': isMarked ? 12 : 8,
-                        'line-opacity': 0.15,
-                        'line-translate': [0, -i * 2],
+                        'line-opacity': 0.1,
+                        'line-translate': [0, i * 2], // Translate DOWN to create depth below ground
                         'line-translate-anchor': 'viewport'
                       },
                       layout: {
@@ -294,7 +379,7 @@ const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMar
                     'line-color': '#ffffff',
                     'line-width': isMarked ? 14 : 10,
                     'line-opacity': isMarked ? 0.9 : 0.7,
-                    'line-translate': [0, -12],
+                    'line-translate': [0, 0], // No translation for accuracy
                     'line-translate-anchor': 'viewport'
                   }}
                   layout={{
@@ -310,7 +395,7 @@ const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMar
                     'line-color': track.color || '#ff0000',
                     'line-width': isMarked ? 8 : 5,
                     'line-opacity': 1.0,
-                    'line-translate': [0, -12],
+                    'line-translate': [0, 0], // No translation for accuracy
                     'line-translate-anchor': 'viewport'
                   }}
                   layout={{
@@ -423,7 +508,7 @@ const Map3D: React.FC<Map3DProps> = ({ tracks, activeLayer, markedTrackId, onMar
                 'circle-color': '#10b981',
                 'circle-stroke-width': 3,
                 'circle-stroke-color': '#ffffff',
-                'circle-translate': [0, -12],
+                'circle-translate': [0, 0], // No translation for accuracy
                 'circle-translate-anchor': 'viewport'
               }}
             />

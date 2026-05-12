@@ -56,9 +56,11 @@ export const parseFIT = async (arrayBuffer: ArrayBuffer, fileName: string): Prom
         }
         
         const time = record.data.timestamp; // Already a Date from parseRecords
-        const power = record.data.power;
-        const hr = record.data.heart_rate;
-        return { lat, lng, ele, time, power, hr };
+        const power = record.data.power !== undefined ? record.data.power : record.data.instantaneous_power;
+        const hr = record.data.heart_rate !== undefined ? record.data.heart_rate : record.data.heartRate;
+        const cad = record.data.cadence !== undefined ? record.data.cadence : record.data.instantaneous_cadence;
+        
+        return { lat, lng, ele, time, power, hr, cadence: cad };
       })
       .filter((p: any) => p !== null) as GPXPoint[];
 
@@ -67,7 +69,25 @@ export const parseFIT = async (arrayBuffer: ArrayBuffer, fileName: string): Prom
       return null;
     }
 
-    const name = fileName.replace(/\.[^/.]+$/, "") || "FIT Activity";
+    const firstPoint = points.find(p => p.time !== undefined) || points[0];
+    const startDate = firstPoint?.time || new Date();
+    const dateStr = startDate.toLocaleDateString('de-DE', { 
+      year: 'numeric', 
+      month: '2-digit', 
+      day: '2-digit' 
+    });
+    const timeStr = startDate.toLocaleTimeString('de-DE', { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    
+    let name = `${dateStr}, ${timeStr}`;
+    if (firstPoint?.lat !== undefined && firstPoint?.lng !== undefined) {
+      name += ` (${firstPoint.lat.toFixed(2)}, ${firstPoint.lng.toFixed(2)})`;
+    } else {
+      name += ` - ${fileName.replace(/\.[^/.]+$/, "")}`;
+    }
+
     const { ascent, descent, maxSlope, totalDist } = calculateElevationStats(points);
     const powerStats = calculatePowerStats(points);
     const surfaceStats = generateMockSurfaceStats(totalDist);
