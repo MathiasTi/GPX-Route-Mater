@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { MapContainer, TileLayer, Polyline, useMapEvents, useMap, Marker, Popup, Rectangle } from 'react-leaflet';
 import L from 'leaflet';
-import { GPXTrack, MapLayer, MAP_LAYERS, GPXPoint } from '../types';
+import { GPXTrack, MapLayer, MAP_LAYERS, GPXPoint, TextMarker } from '../types';
 import { calculateDistance } from '../utils/gpxUtils';
 
 // Fix for default marker icons in Leaflet + React
@@ -27,6 +27,9 @@ interface MapProps {
   onMapViewChange: (view: {lat: number, lng: number, zoom: number, pitch: number, bearing: number}) => void;
   estimatedSpeed?: number;
   isFlying?: boolean;
+  textMarkers: TextMarker[];
+  onAddTextMarker: (marker: Omit<TextMarker, 'id'>) => void;
+  onDeleteTextMarker: (id: string) => void;
 }
 
 const ZoomToTracks = ({ tracks }: { tracks: GPXTrack[] }) => {
@@ -259,8 +262,34 @@ const LeafletTileLayer = TileLayer as any;
 const LeafletPolyline = Polyline as any;
 const LeafletMarker = Marker as any;
 
-const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTrack, hoveredPoint, onHoverPoint, selectionBounds, onSelection, mapView, onMapViewChange, estimatedSpeed = 15, isFlying = false }) => {
+const Map: React.FC<MapProps> = ({ 
+  tracks, 
+  activeLayer, 
+  markedTrackId, 
+  onMarkTrack, 
+  hoveredPoint, 
+  onHoverPoint, 
+  selectionBounds, 
+  onSelection, 
+  mapView, 
+  onMapViewChange, 
+  estimatedSpeed = 15, 
+  isFlying = false,
+  textMarkers,
+  onAddTextMarker,
+  onDeleteTextMarker
+}) => {
   const layer = MAP_LAYERS[activeLayer];
+  const [pendingMarker, setPendingMarker] = useState<{lat: number, lng: number} | null>(null);
+
+  const MapClickHandle = () => {
+    useMapEvents({
+      click(e) {
+        setPendingMarker({ lat: e.latlng.lat, lng: e.latlng.lng });
+      }
+    });
+    return null;
+  };
 
   return (
     <div className="w-full h-full relative">
@@ -460,6 +489,183 @@ const Map: React.FC<MapProps> = ({ tracks, activeLayer, markedTrackId, onMarkTra
               iconAnchor: [8, 8]
             })} 
           />
+        )}
+
+        <MapClickHandle />
+
+        {textMarkers.map(marker => {
+          const colorMap: Record<string, string> = {
+            indigo: '#3b82f6',
+            emerald: '#10b981',
+            rose: '#f43f5e',
+            amber: '#f59e0b',
+            slate: '#64748b'
+          };
+          const bgColor = colorMap[marker.color] || '#3b82f6';
+          
+          return (
+            <LeafletMarker
+              key={marker.id}
+              position={[marker.lat, marker.lng]}
+              icon={new L.DivIcon({
+                className: 'custom-text-marker',
+                html: `
+                  <div class="relative flex flex-col items-center select-none" style="transform: translate(-50%, -100%); margin-top: -12px;">
+                    <div class="text-white text-[10px] font-black px-2 py-1 rounded-lg shadow-lg whitespace-nowrap border-2 border-white flex items-center gap-1" style="background-color: ${bgColor};">
+                      <span>🏷️</span> ${marker.label}
+                    </div>
+                    <div class="w-2.5 h-2.5 rotate-45 -mt-1 shadow-md border-r-2 border-b-2 border-white" style="background-color: ${bgColor};"></div>
+                  </div>
+                `,
+                iconSize: [0, 0],
+                iconAnchor: [0, 0]
+              })}
+            >
+              <Popup>
+                <div className="text-xs p-1 min-w-[124px]">
+                  <div className="font-bold mb-1 text-slate-800 dark:text-slate-100">{marker.label}</div>
+                  {marker.distanceAlongTrack !== undefined && (
+                    <div className="text-[10px] text-blue-600 dark:text-blue-400 font-bold mb-1">km {marker.distanceAlongTrack.toFixed(2)}</div>
+                  )}
+                  <div className="text-[9px] text-slate-400 font-mono mb-2">
+                    {marker.lat.toFixed(5)}, {marker.lng.toFixed(5)}
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      L.DomEvent.stopPropagation(e);
+                      onDeleteTextMarker(marker.id);
+                    }}
+                    className="w-full text-center px-1.5 py-1 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-[10px] font-bold border border-red-200 transition-colors"
+                  >
+                    Notiz löschen
+                  </button>
+                </div>
+              </Popup>
+            </LeafletMarker>
+          );
+        })}
+
+        {pendingMarker && (
+          <LeafletMarker
+            position={[pendingMarker.lat, pendingMarker.lng]}
+            icon={new L.DivIcon({
+              className: 'pending-marker',
+              html: `
+                <div class="relative flex flex-col items-center select-none" style="transform: translate(-50%, -100%); margin-top: -12px;">
+                  <div class="bg-blue-600 text-white text-[10px] font-black px-2 py-1 rounded-lg shadow-lg whitespace-nowrap border-2 border-white flex items-center gap-1">
+                    <span>📍 Neue Notiz...</span>
+                  </div>
+                  <div class="w-2.5 h-2.5 bg-blue-600 rotate-45 -mt-1 shadow-md border-r-2 border-b-2 border-white"></div>
+                </div>
+              `,
+              iconSize: [0, 0],
+              iconAnchor: [0, 0]
+            })}
+          >
+            <Popup 
+              position={[pendingMarker.lat, pendingMarker.lng]}
+              onClose={() => setPendingMarker(null)}
+            >
+              <div 
+                className="p-1.5 w-44 space-y-2 text-xs"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="font-bold text-slate-850 dark:text-slate-100 leading-tight">Neue Notiz erstellen</div>
+                <div className="space-y-1">
+                  <input
+                    id="pending-marker-input"
+                    type="text"
+                    placeholder="z.B. Sprint, Verpflegung"
+                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-250 dark:border-slate-800 rounded-lg px-2 py-1 text-[11px] font-bold text-slate-850 outline-none"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const val = (e.target as HTMLInputElement).value.trim();
+                        if (val) {
+                          let dist: number | undefined = undefined;
+                          const track = tracks.find(t => t.id === markedTrackId);
+                          if (track) {
+                            let closestIdx = 0;
+                            let minDist = Infinity;
+                            for (let i = 0; i < track.points.length; i++) {
+                              const pt = track.points[i];
+                              const diff = Math.abs(pt.lat - pendingMarker.lat) + Math.abs(pt.lng - pendingMarker.lng);
+                              if (diff < minDist) {
+                                minDist = diff;
+                                closestIdx = i;
+                              }
+                            }
+                            let sum = 0;
+                            for (let i = 1; i <= closestIdx; i++) {
+                              sum += calculateDistance(track.points[i-1], track.points[i]);
+                            }
+                            dist = sum;
+                          }
+
+                          onAddTextMarker({
+                            lat: pendingMarker.lat,
+                            lng: pendingMarker.lng,
+                            label: val,
+                            color: 'indigo',
+                            trackId: markedTrackId || undefined,
+                            distanceAlongTrack: dist
+                          });
+                          setPendingMarker(null);
+                        }
+                      }
+                    }}
+                  />
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => {
+                      const el = document.getElementById('pending-marker-input') as HTMLInputElement;
+                      const val = el?.value.trim();
+                      if (val) {
+                        let dist: number | undefined = undefined;
+                        const track = tracks.find(t => t.id === markedTrackId);
+                        if (track) {
+                          let closestIdx = 0;
+                          let minDist = Infinity;
+                          for (let i = 0; i < track.points.length; i++) {
+                            const pt = track.points[i];
+                            const diff = Math.abs(pt.lat - pendingMarker.lat) + Math.abs(pt.lng - pendingMarker.lng);
+                            if (diff < minDist) {
+                              minDist = diff;
+                              closestIdx = i;
+                            }
+                          }
+                          let sum = 0;
+                          for (let i = 1; i <= closestIdx; i++) {
+                            sum += calculateDistance(track.points[i-1], track.points[i]);
+                          }
+                          dist = sum;
+                        }
+
+                        onAddTextMarker({
+                          lat: pendingMarker.lat,
+                          lng: pendingMarker.lng,
+                          label: val,
+                          color: 'indigo',
+                          trackId: markedTrackId || undefined,
+                          distanceAlongTrack: dist
+                        });
+                        setPendingMarker(null);
+                      }
+                    }}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-1 rounded text-[10px] text-center"
+                  >
+                    Speichern
+                  </button>
+                  <button
+                    onClick={() => setPendingMarker(null)}
+                    className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-605 font-bold py-1 rounded text-[10px] text-center"
+                  >
+                    Abbrechen
+                  </button>
+                </div>
+              </div>
+            </Popup>
+          </LeafletMarker>
         )}
       </LeafletMapContainer>
     </div>

@@ -100,3 +100,14 @@ export interface WeatherData {
   isFallback?: boolean;
   fallbackNotice?: string;
 }
+
+export interface TextMarker {
+  id: string;
+  lat: number;
+  lng: number;
+  label: string;
+  color: string; // Hex code or tailwind color name
+  trackId?: string; // Associated track if created from a track point
+  distanceAlongTrack?: number; // Distance in km from start of that track
+}
+

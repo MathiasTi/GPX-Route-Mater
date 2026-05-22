@@ -19,14 +19,23 @@ import { GPXTrack, WeatherData } from '../types';
 
 interface WeatherOverlayProps {
   track: GPXTrack | undefined;
+  selectedDate: string;
+  setSelectedDate: (date: string) => void;
+  selectedTime: string;
+  setSelectedTime: (time: string) => void;
 }
 
-export const WeatherOverlay: React.FC<WeatherOverlayProps> = ({ track }) => {
+export const WeatherOverlay: React.FC<WeatherOverlayProps> = ({ 
+  track,
+  selectedDate,
+  setSelectedDate,
+  selectedTime,
+  setSelectedTime
+}) => {
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(true);
-  const [selectedDate, setSelectedDate] = useState<string>('2026-05-22');
 
   const fetchWeather = async (lat: number, lng: number, dateStr: string) => {
     setLoading(true);
@@ -45,6 +54,16 @@ export const WeatherOverlay: React.FC<WeatherOverlayProps> = ({ track }) => {
 
       const data = await response.json();
       setWeather(data);
+      
+      // Cache-Eintrag für diese Kombination aus Track-ID und Datum hinterlegen
+      if (track) {
+        try {
+          const cacheKey = `weather_cache_${track.id}_${dateStr}`;
+          localStorage.setItem(cacheKey, JSON.stringify(data));
+        } catch (cacheErr) {
+          console.warn('Could not save weather to localStorage:', cacheErr);
+        }
+      }
     } catch (err: any) {
       console.error('Error in WeatherOverlay:', err);
       setError(err?.message || 'Fehler beim Abrufen der Wetterdaten.');
@@ -54,10 +73,25 @@ export const WeatherOverlay: React.FC<WeatherOverlayProps> = ({ track }) => {
   };
 
   useEffect(() => {
-    // Clear weather on new track selection to avoid auto-firing API requests and causing 429 errors.
+    if (track) {
+      const cacheKey = `weather_cache_${track.id}_${selectedDate}`;
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          setWeather(parsed);
+          setError(null);
+          return;
+        } catch (e) {
+          console.warn('Stale cache, purging...', e);
+          localStorage.removeItem(cacheKey);
+        }
+      }
+    }
+    // Den Wetterzustand nullen, damit der Nutzer ihn per Klick anfordern kann if not in cache
     setWeather(null);
     setError(null);
-  }, [track?.id]);
+  }, [track?.id, selectedDate]);
 
   const handleRefresh = () => {
     if (track && track.points && track.points.length > 0) {
@@ -179,16 +213,29 @@ export const WeatherOverlay: React.FC<WeatherOverlayProps> = ({ track }) => {
                     Wetterprognose am Startpunkt ({track.points[0]?.lat.toFixed(4)}, {track.points[0]?.lng.toFixed(4)}) mittels Google Search Grounding abfragen.
                   </div>
                   
-                  <div className="space-y-1.5">
-                    <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest block">
-                      Vorhersage-Datum wählen 📅
-                    </label>
-                    <input 
-                      type="date" 
-                      value={selectedDate}
-                      onChange={(e) => setSelectedDate(e.target.value)}
-                      className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-250 focus:ring-2 focus:ring-indigo-500/20 outline-none cursor-pointer"
-                    />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest block">
+                        Start-Datum 📅
+                      </label>
+                      <input 
+                        type="date" 
+                        value={selectedDate}
+                        onChange={(e) => setSelectedDate(e.target.value)}
+                        className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-250 focus:ring-2 focus:ring-indigo-500/20 outline-none cursor-pointer"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest block">
+                        Startzeit ⏰
+                      </label>
+                      <input 
+                        type="time" 
+                        value={selectedTime}
+                        onChange={(e) => setSelectedTime(e.target.value)}
+                        className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 dark:text-slate-250 focus:ring-2 focus:ring-indigo-500/20 outline-none cursor-pointer"
+                      />
+                    </div>
                   </div>
 
                   <button
@@ -273,25 +320,38 @@ export const WeatherOverlay: React.FC<WeatherOverlayProps> = ({ track }) => {
                     {weather.forecastSummary}
                   </div>
 
-                  {/* Interaktive Datumswahl auch im geladenen Zustand */}
-                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-                    <div className="flex items-center gap-1">
-                      <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Datum:</span>
-                      <input 
-                        type="date" 
-                        value={selectedDate}
-                        onChange={(e) => setSelectedDate(e.target.value)}
-                        className="bg-transparent text-[11px] font-black text-indigo-600 dark:text-indigo-400 focus:outline-none cursor-pointer border-b border-dashed border-indigo-200 hover:border-indigo-400"
-                      />
+                  {/* Interaktive Datum- und Startzeitwahl auch im geladenen Zustand */}
+                  <div className="flex flex-col gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 flex-1 min-w-0">
+                        <div className="flex items-center gap-1">
+                          <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider">Start:</span>
+                          <input 
+                            type="date" 
+                            value={selectedDate}
+                            onChange={(e) => setSelectedDate(e.target.value)}
+                            className="bg-transparent text-[11px] font-black text-indigo-600 dark:text-indigo-400 focus:outline-none cursor-pointer border-b border-dashed border-indigo-200 hover:border-indigo-400"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[9px] text-slate-400 font-bold uppercase tracking-wider sm:ml-1">Zeit:</span>
+                          <input 
+                            type="time" 
+                            value={selectedTime}
+                            onChange={(e) => setSelectedTime(e.target.value)}
+                            className="bg-transparent text-[11px] font-black text-indigo-600 dark:text-indigo-400 focus:outline-none cursor-pointer border-b border-dashed border-indigo-200 hover:border-indigo-400 w-[45px]"
+                          />
+                        </div>
+                      </div>
+                      <button 
+                        onClick={handleRefresh}
+                        disabled={loading}
+                        className="text-[10px] text-indigo-600 hover:text-indigo-700 font-bold bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 px-2 py-1 rounded-lg flex items-center gap-1 transition-all cursor-pointer shrink-0"
+                      >
+                        <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
+                        Aktualisieren
+                      </button>
                     </div>
-                    <button 
-                      onClick={handleRefresh}
-                      disabled={loading}
-                      className="text-[10px] text-indigo-600 hover:text-indigo-700 font-bold bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 px-2 py-1 rounded-lg flex items-center gap-1 transition-all cursor-pointer"
-                    >
-                      <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
-                      Aktualisieren
-                    </button>
                   </div>
 
                   {/* Search grounding citation metadata link */}

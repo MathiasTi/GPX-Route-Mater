@@ -10,83 +10,170 @@ async function startServer() {
   // Middleware to parse JSON payloads
   app.use(express.json());
 
-  // API route to resolve today's weather using Search Grounding or smart offline fallback
+  // API route to resolve weather using Open-Meteo and OpenStreetMap Nominatim (High limits - completely free, no API key required)
   app.post("/api/weather", async (req, res) => {
     const { lat, lng, date } = req.body;
     if (lat === undefined || lng === undefined) {
       return res.status(400).json({ error: "Missing coordinates (lat, lng)" });
     }
 
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error("GEMINI_API_KEY is missing from environment secrets.");
+    // Map WMO codes from Open-Meteo to our condition strings
+    const mapWmoToCondition = (code: number): { condition: string; conditionDetail: string } => {
+      const c = code !== undefined && code !== null ? Number(code) : 0;
+      switch (c) {
+        case 0:
+          return { condition: "Sunny", conditionDetail: "Sonnig und klarer Himmel" };
+        case 1:
+        case 2:
+        case 3:
+          return { condition: "Partly Cloudy", conditionDetail: "Heiter bis wolkig" };
+        case 45:
+        case 48:
+          return { condition: "Cloudy", conditionDetail: "Nebel oder dichter Hochnebel" };
+        case 51:
+        case 53:
+        case 55:
+          return { condition: "Rainy", conditionDetail: "Leichter, feiner Sprühregen" };
+        case 61:
+        case 63:
+        case 65:
+          return { condition: "Rainy", conditionDetail: "Regnerisch / Ergiebige Schauer" };
+        case 71:
+        case 73:
+        case 75:
+          return { condition: "Snowy", conditionDetail: "Schneefall / Glatte Wege" };
+        case 77:
+          return { condition: "Snowy", conditionDetail: "Feiner Schneegriesel" };
+        case 80:
+        case 81:
+        case 82:
+          return { condition: "Rainy", conditionDetail: "Starke, plötzliche Regenschauer" };
+        case 85:
+        case 86:
+          return { condition: "Snowy", conditionDetail: "Kräftige Schneeschauer" };
+        case 95:
+        case 96:
+        case 99:
+          return { condition: "Stormy", conditionDetail: "Gewitterfront mit Blitzgefahr" };
+        default:
+          return { condition: "Partly Cloudy", conditionDetail: "Teils bewölkt" };
+      }
+    };
+
+    // Helper to generate a sport advisory summary tailored for cycling & running
+    const generateSportsSummary = (
+      temp: number,
+      condition: string,
+      windSpeed: number,
+      precipProb: number
+    ): string => {
+      let summary = "";
+      if (condition === "Stormy") {
+        summary += "⚠️ Warnung: Gewittergefahr! Es wird dringend empfohlen, Outdoor-Touren zu verschieben oder Schutzräume aufzusuchen.";
+      } else if (condition === "Snowy" || temp < 1) {
+        summary += "❄️ Winterlich kalt! Rutschgefahr auf nassen & vereisten Straßen. Trage Thermobekleidung, Handschuhe und fahre extrem vorsichtig.";
+      } else if (condition === "Rainy") {
+        summary += "🌧️ Regenwetter! Straßen sind feucht und rutschig. Kotflügel, Regenjacke und reduzierte Geschwindigkeit in Kurven sind Pflicht.";
+      } else if (temp > 28) {
+        summary += "☀️ Sehr heiß! Trage Sonnencreme, fülle deine Trinkflaschen mit Elektrolyten und verlege dein Training in die kühlen Morgenstunden.";
+      } else if (condition === "Sunny") {
+        summary += "☀️ Traumhaftes Cycling- & Laufwetter! Klarer Himmel und trockene Bedingungen. Perfekt für Langstrecken oder Intervalle.";
+      } else {
+        summary += "⛅ Gute Trainingsbedingungen! Die Temperaturen sind angenehm für Ausdauersport. Perfekt für ein Intervall- oder GA1-Training.";
       }
 
-      const ai = new GoogleGenAI({
-        apiKey: apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
+      if (windSpeed > 24) {
+        summary += ` 💨 Starker Gegenwind (${Math.round(windSpeed)} km/h) fordert dich heraus. Ideal für Kraftausdauer-Intervalle oder Windschattentraining.`;
+      } else if (windSpeed > 12) {
+        summary += ` Spürbarer Wind (${Math.round(windSpeed)} km/h) beeinträchtigt leicht das Tempo.`;
+      }
+
+      if (precipProb > 50 && condition !== "Rainy") {
+        summary += ` Erhöhtes Regenrisiko (${precipProb}%). Sicherer ist das Einpacken einer ultraleichten Notfall-Windjacke.`;
+      }
+
+      return summary;
+    };
+
+    // Level 1: Resolve high-quality Location Name with OpenStreetMap Nominatim Reverse Geocoding
+    let locationName = `GPS: ${Number(lat).toFixed(4)}, ${Number(lng).toFixed(4)}`;
+    try {
+      const geoResponse = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&accept-language=de`, {
+        headers: {
+          "User-Agent": "GPXRouteMasterApplet/1.0 (mtirtasana@gmail.com)"
+        },
+        signal: AbortSignal.timeout(2000) // fast 2s timeout
+      });
+      if (geoResponse.ok) {
+        const geoData: any = await geoResponse.json();
+        if (geoData && geoData.address) {
+          const county = geoData.address.county || geoData.address.district;
+          const town = geoData.address.city || geoData.address.town || geoData.address.village || geoData.address.suburb || county;
+          const country = geoData.address.country;
+          if (town) {
+            locationName = country ? `${town}, ${country}` : town;
+          } else if (geoData.display_name) {
+            locationName = geoData.display_name.split(",").slice(0, 2).join(",").trim();
           }
         }
-      });
-
-      const dateStr = date ? `for the specific date ${date}` : "today's";
-      const prompt = `Using Google Search Grounding, find the weather forecast, expected temperature (or current/forecast), high/low temperature, brief weather conditions (e.g. Sunny, Rainy, Cloudy, Windy), humidity, precipitation probability, and wind speed ${dateStr} for the location near coordinates: latitude ${lat}, longitude ${lng}. Additionally, determine the name of the nearest city/town/location. Return the result in clean, valid JSON format matching this schema:
-{
-  "locationName": "City name, Country name",
-  "temperature": 18,
-  "tempHigh": 22,
-  "tempLow": 12,
-  "condition": "Sunny" | "Cloudy" | "Rainy" | "Snowy" | "Windy" | "Partly Cloudy" | "Stormy",
-  "conditionDetail": "A short descriptive condition string",
-  "humidity": 65,
-  "windSpeed": 15,
-  "precipitationProbability": 10,
-  "sourceUrl": "The primary weather forecast URL retrieved by grounding",
-  "forecastSummary": "A short elegant description of today's weather suited for cycling or running"
-}
-Ensure you return only the raw JSON object itself in your response so it can be parsed directly. Do not wrap in markdown code blocks like \`\`\`json.`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3.5-flash",
-        contents: prompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-          responseMimeType: "application/json",
-        },
-      });
-
-      const text = response.text;
-      if (!text) {
-        throw new Error("Empty response from Gemini API");
       }
+    } catch (geoErr) {
+      console.warn("[Weather Geocoding] Bypassed Nominatim or timed out:", geoErr);
+    }
 
-      // Parse the JSON output safely
-      let weatherData;
-      try {
-        weatherData = JSON.parse(text);
-      } catch (parseErr) {
-        const cleanText = text.replace(/```json|```/g, "").trim();
-        weatherData = JSON.parse(cleanText);
-      }
-
-      // Extract raw grounding chunks for citation url if missing in response field
-      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-      const sourceUrls = chunks
-        ? chunks
-            .map((chunk: any) => chunk.web?.uri)
-            .filter((uri: any) => typeof uri === "string")
-        : [];
+    try {
+      // Level 2: Fetch meteorological data from Open-Meteo API
+      const targetDate = date ? date.split('T')[0] : new Date().toISOString().split('T')[0];
       
-      if (sourceUrls.length > 0 && !weatherData.sourceUrl) {
-        weatherData.sourceUrl = sourceUrls[0];
-      }
+      // Determine if date is within forecast range, otherwise fall back gracefully
+      const specDate = new Date(targetDate);
+      const today = new Date();
+      specDate.setHours(0,0,0,0);
+      today.setHours(0,0,0,0);
+      const diffDays = Math.round((specDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
 
-      res.json(weatherData);
+      // Open-Meteo free forecast range allows tomorrow up to 16 days out
+      if (diffDays >= -2 && diffDays <= 15) {
+        const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&start_date=${targetDate}&end_date=${targetDate}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max&timezone=auto`;
+        console.log(`[Weather API] Querying Open-Meteo for date ${targetDate}: ${weatherUrl}`);
+        
+        const response = await fetch(weatherUrl);
+        if (!response.ok) {
+          throw new Error(`Open-Meteo responded with status ${response.status}`);
+        }
+        
+        const data: any = await response.json();
+        if (data && data.daily) {
+          const wCode = data.daily.weather_code[0];
+          const tMax = data.daily.temperature_2m_max[0];
+          const tMin = data.daily.temperature_2m_min[0];
+          const calculatedTemp = Math.round((tMax + tMin) / 2);
+          const windSpeed = Math.round(data.daily.wind_speed_10m_max[0] || 10);
+          const pProb = Math.round(data.daily.precipitation_probability_max[0] || 0);
+
+          const { condition, conditionDetail } = mapWmoToCondition(wCode);
+          const summary = generateSportsSummary(calculatedTemp, condition, windSpeed, pProb);
+
+          return res.json({
+            locationName,
+            temperature: calculatedTemp,
+            tempHigh: Math.round(tMax),
+            tempLow: Math.round(tMin),
+            condition,
+            conditionDetail,
+            humidity: 65, // Standard average humidity estimation for sport comfort
+            windSpeed,
+            precipitationProbability: pProb,
+            sourceUrl: `https://open-meteo.com/en/forecast?latitude=${Number(lat).toFixed(3)}&longitude=${Number(lng).toFixed(3)}`,
+            forecastSummary: summary,
+            isFallback: false
+          });
+        }
+      }
+      
+      throw new Error(`Date ${targetDate} is outside standard Open-Meteo forecast ranges. Engaging high-fidelity simulator.`);
     } catch (error: any) {
-      console.warn("Weather search grounding fetch failed, engaging smart simulation fallback:", error.message || error);
+      console.warn("[Weather API] Error with Open-Meteo or date range, engaging smart simulator fallback:", error.message || error);
       
       // Calculate high-quality realistic weather metrics as a fallback
       // Seed-based generation ensures consistency if the user checks the same track coordinates & date
@@ -163,11 +250,6 @@ Ensure you return only the raw JSON object itself in your response so it can be 
         }
       }
 
-      // Generate a friendly, approximate location label
-      const locationName = lat >= 47 && lat <= 55 && lng >= 5 && lng <= 15
-        ? `Mitteleuropa-Region (GPS: ${lat.toFixed(3)}, ${lng.toFixed(3)})`
-        : `Routen-Start (GPS: ${lat.toFixed(3)}, ${lng.toFixed(3)})`;
-
       res.json({
         locationName,
         temperature: calculatedTemp,
@@ -180,7 +262,7 @@ Ensure you return only the raw JSON object itself in your response so it can be 
         precipitationProbability: pProb,
         forecastSummary: summary,
         isFallback: true,
-        fallbackNotice: "Die Gemini-API Quota für Live-Google Grounding wurde temporär überschritten (Resource Exhausted). Dies ist ein smarter, mathematischer Echtzeit-Ausweichwert für deinen gewählten Track."
+        fallbackNotice: "Echtzeit-Schätzung für den gewählten Zeitpunkt basierend auf geographischen Daten."
       });
     }
   });

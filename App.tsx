@@ -13,6 +13,7 @@ import AdvancedAnalytics from './components/AdvancedAnalytics';
 import { AnimatePresence } from 'motion/react';
 import { VideoExportModal } from './components/VideoExportModal';
 import { WeatherOverlay } from './components/WeatherOverlay';
+import { ClimbsAnalysis } from './components/ClimbsAnalysis';
 
 const App: React.FC = () => {
   const [tracks, setTracks] = useState<GPXTrack[]>([]);
@@ -23,6 +24,7 @@ const App: React.FC = () => {
   const [is3D, setIs3D] = useState(false);
   const [ftp, setFtp] = useState(250);
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
+  const [climbsOpen, setClimbsOpen] = useState(false);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
   const [mapView, setMapView] = useState({
     lat: 51.1657,
@@ -38,6 +40,8 @@ const App: React.FC = () => {
   const [userWeight, setUserWeight] = useState(75);
   const [userAge, setUserAge] = useState(35);
   const [estimatedSpeed, setEstimatedSpeed] = useState(15); // km/h
+  const [selectedDate, setSelectedDate] = useState<string>('2026-05-22');
+  const [selectedTime, setSelectedTime] = useState<string>('09:00');
   const [isFlying, setIsFlying] = useState(false);
   const [flyProgress, setFlyProgress] = useState(0); // 0 to 1
   const [flySpeed, setFlySpeed] = useState(1); // multiplier
@@ -237,6 +241,10 @@ const App: React.FC = () => {
         setIsMobileMenuOpen={setIsMobileMenuOpen}
         estimatedSpeed={estimatedSpeed}
         setEstimatedSpeed={setEstimatedSpeed}
+        selectedDate={selectedDate}
+        setSelectedDate={setSelectedDate}
+        selectedTime={selectedTime}
+        setSelectedTime={setSelectedTime}
         ftp={ftp}
         setFtp={setFtp}
         userWeight={userWeight}
@@ -246,6 +254,10 @@ const App: React.FC = () => {
         suggestedFtp={suggestedFtp}
         onOpenAnalytics={() => {
           setAnalyticsOpen(true);
+          setIsMobileMenuOpen(false);
+        }}
+        onOpenClimbs={() => {
+          setClimbsOpen(true);
           setIsMobileMenuOpen(false);
         }}
       />
@@ -297,7 +309,13 @@ const App: React.FC = () => {
             />
           )}
 
-          <WeatherOverlay track={markedTrack} />
+          <WeatherOverlay 
+            track={markedTrack}
+            selectedDate={selectedDate}
+            setSelectedDate={setSelectedDate}
+            selectedTime={selectedTime}
+            setSelectedTime={setSelectedTime}
+          />
 
           <AnimatePresence>
             {analyticsOpen && markedTrack && (
@@ -309,6 +327,16 @@ const App: React.FC = () => {
                 selectionBounds={selectionBounds}
                 onSelection={setSelectionBounds}
                 onClose={() => setAnalyticsOpen(false)} 
+              />
+            )}
+          </AnimatePresence>
+
+          <AnimatePresence>
+            {climbsOpen && markedTrack && (
+              <ClimbsAnalysis 
+                track={markedTrack} 
+                activeLayer={activeLayer}
+                onClose={() => setClimbsOpen(false)} 
               />
             )}
           </AnimatePresence>
@@ -369,6 +397,8 @@ const App: React.FC = () => {
               selectionBounds={selectionBounds}
               onSelection={setSelectionBounds}
               estimatedSpeed={estimatedSpeed}
+              selectedDate={selectedDate}
+              selectedTime={selectedTime}
               isFlying={isFlying}
               flySpeed={flySpeed}
               onFlySpeedChange={setFlySpeed}

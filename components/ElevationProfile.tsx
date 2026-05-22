@@ -10,6 +10,8 @@ interface ElevationProfileProps {
   selectionBounds?: {minLat: number, maxLat: number, minLng: number, maxLng: number} | null;
   onSelection?: (bounds: {minLat: number, maxLat: number, minLng: number, maxLng: number} | null) => void;
   estimatedSpeed?: number;
+  selectedDate: string;
+  selectedTime: string;
   isFlying?: boolean;
   flySpeed?: number;
   onFlySpeedChange?: (speed: number) => void;
@@ -37,6 +39,8 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({
   selectionBounds, 
   onSelection, 
   estimatedSpeed = 15,
+  selectedDate,
+  selectedTime,
   isFlying = false,
   flySpeed = 1,
   onFlySpeedChange,
@@ -54,6 +58,13 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({
   const [dragStartX, setDragStartX] = useState<number | null>(null);
   const [dragCurrentX, setDragCurrentX] = useState<number | null>(null);
   const [showSelectedSurfaceStats, setShowSelectedSurfaceStats] = useState(true);
+
+  const baseDate = useMemo(() => {
+    if (!selectedDate || !selectedTime) return null;
+    const [year, month, day] = selectedDate.split('-').map(Number);
+    const [hours, minutes] = selectedTime.split(':').map(Number);
+    return new Date(year, month - 1, day, hours, minutes, 0);
+  }, [selectedDate, selectedTime]);
 
   // Reset surface stats visibility when selection changes
   React.useEffect(() => {
@@ -420,7 +431,7 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({
   let selectedDescent = 0;
   let selectedDistance = 0;
   let selectedEnergy = 0;
-  let selectedTime = 0;
+  let selectionElapsedSecs = 0;
   let selectedSurfaceStats: {type: string, distance: number}[] = [];
 
   if (selectionBounds) {
@@ -455,7 +466,7 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({
               const dt = (p.time.getTime() - prevP.time.getTime()) / 1000;
               if (dt > 0 && dt < 300) { // Ignore gaps > 5 mins
                 selectedEnergy += (prevP.power ?? 0) * dt;
-                selectedTime += dt;
+                selectionElapsedSecs += dt;
               }
             }
           }
@@ -658,8 +669,8 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({
                 <span className="flex gap-1 items-center"><span className="text-blue-600 text-[16px]">↔</span> <span className="text-sm text-slate-700">{selectedDistance.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}km</span></span>
                 <span className="flex gap-1 items-center"><span className="text-emerald-600 text-[16px]">▲</span> <span className="text-sm text-slate-700">{selectedAscent.toLocaleString('de-DE', { maximumFractionDigits: 0 })}m</span></span>
                 <span className="flex gap-1 items-center"><span className="text-rose-600 text-[16px]">▼</span> <span className="text-sm text-slate-700">{selectedDescent.toLocaleString('de-DE', { maximumFractionDigits: 0 })}m</span></span>
-                {selectedTime > 0 && (
-                  <span className="flex gap-1 items-center"><span className="text-amber-600 text-[16px]">⚡</span> <span className="text-sm text-slate-700">{(selectedEnergy / selectedTime).toLocaleString('de-DE', { maximumFractionDigits: 0 })}W</span></span>
+                {selectionElapsedSecs > 0 && (
+                  <span className="flex gap-1 items-center"><span className="text-amber-600 text-[16px]">⚡</span> <span className="text-sm text-slate-700">{(selectedEnergy / selectionElapsedSecs).toLocaleString('de-DE', { maximumFractionDigits: 0 })}W</span></span>
                 )}
                 {showSelectedSurfaceStats && selectedSurfaceStats.length > 0 && (
                   <div className="flex items-center gap-2 ml-2 pl-2 border-l border-slate-200">
@@ -907,7 +918,10 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({
               let timeStr = "";
               if (profileData.duration) {
                 const timeAtDist = (d / distRange) * profileData.duration;
-                if (profileData.hasTimestamps && track.points[0].time) {
+                if (baseDate) {
+                  const t = new Date(baseDate.getTime() + timeAtDist * 1000);
+                  timeStr = t.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+                } else if (profileData.hasTimestamps && track.points[0].time) {
                   const t = new Date(track.points[0].time.getTime() + timeAtDist * 1000);
                   timeStr = t.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
                 } else {
@@ -1047,7 +1061,14 @@ const ElevationProfile: React.FC<ElevationProfileProps> = ({
                       <g transform={`translate(0, ${(hasPower ? 16 : 0) + (hasHr ? 16 : 0) + 16})`}>
                         <text className="text-[10px] fill-blue-400">Zeit:</text>
                         <text x={boxWidth - 20} textAnchor="end" className="text-[10px] font-bold fill-white">
-                          {hasTime ? (
+                          {baseDate ? (() => {
+                            const startGPXTime = track.points.find(p => p.time !== undefined)?.time;
+                            const elapsedSecs = (hasTime && startGPXTime)
+                              ? (new Date(hoverInfo.time!).getTime() - new Date(startGPXTime).getTime()) / 1000
+                              : (hoverInfo.dist / estimatedSpeed) * 3600;
+                            const finalTime = new Date(baseDate.getTime() + elapsedSecs * 1000);
+                            return finalTime.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                          })() : hasTime ? (
                             new Date(hoverInfo.time!).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
                           ) : (
                             `+${Math.floor((hoverInfo.dist / estimatedSpeed))}h ${Math.floor(((hoverInfo.dist / estimatedSpeed) * 60) % 60)}m`

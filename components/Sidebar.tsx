@@ -1,8 +1,9 @@
 
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GPXTrack, MapLayer } from '../types';
-import { Upload, Trash2, Combine, Eye, EyeOff, Ruler, Layers, GripVertical, Undo2, TrendingUp, TrendingDown, Box, ChevronLeft, ChevronRight, Menu, Zap, Clock, BarChart2, X } from 'lucide-react';
+import { GPXTrack, MapLayer, TextMarker } from '../types';
+import { Upload, Trash2, Combine, Eye, EyeOff, Ruler, Layers, GripVertical, Undo2, TrendingUp, TrendingDown, Box, ChevronLeft, ChevronRight, Menu, Zap, Clock, BarChart2, X, MapPin, Plus } from 'lucide-react';
+import { calculateDistance } from '../utils/gpxUtils';
 import { 
   DndContext, 
   closestCenter, 
@@ -28,9 +29,10 @@ interface TrackItemProps {
   onRemoveTrack: (id: string) => void;
   estimatedSpeed: number;
   onOpenAnalytics?: (id: string) => void;
+  onOpenClimbs?: (id: string) => void;
 }
 
-const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, onToggleVisibility, onRemoveTrack, estimatedSpeed, onOpenAnalytics }) => {
+const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, onToggleVisibility, onRemoveTrack, estimatedSpeed, onOpenAnalytics, onOpenClimbs }) => {
   const {
     attributes,
     listeners,
@@ -105,14 +107,13 @@ const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, 
               </div>
             )}
             {track.climbs && track.climbs.length > 0 && (
-              <div className="text-[10px] text-indigo-600 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-mono mt-1 pt-1 border-t border-slate-100">
-                <TrendingUp className="w-3 h-3 shrink-0" />
-                <span className="font-bold">Anstiege:</span>
-                {track.climbs.map((climb, idx) => (
-                  <span key={idx} className="bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100" title={`Max Steigung: ${climb.maxGradient.toFixed(1)}%`}>
-                    {climb.avgGradient.toFixed(1)}% / {(climb.distance / 1000).toFixed(1)}km
-                  </span>
-                ))}
+              <div 
+                className="text-[10px] text-indigo-600 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-mono mt-1 pt-1 border-t border-slate-100 group/climbs cursor-pointer hover:text-indigo-800"
+                onClick={(e) => { e.stopPropagation(); onOpenClimbs?.(track.id); }}
+                title="Bergwertungs-Analyse auf separater Seite öffnen"
+              >
+                <TrendingUp className="w-3 h-3 shrink-0 animate-pulse" />
+                <span className="font-extrabold underline">Bergwertung ({track.climbs.length}) ➔</span>
               </div>
             )}
             {track.surfaceStats && track.surfaceStats.length > 0 && (
@@ -143,6 +144,16 @@ const SortableTrackItem: React.FC<TrackItemProps> = ({ track, isMarked, onMark, 
               title="Erweiterte Analyse"
             >
               <BarChart2 className="w-3.5 h-3.5" />
+            </button>
+          )}
+
+          {track.climbs && track.climbs.length > 0 && (
+            <button 
+              onClick={(e) => { e.stopPropagation(); onOpenClimbs?.(track.id); }} 
+              className="p-1 hover:bg-emerald-100 rounded text-emerald-600 transition-colors" 
+              title="Steigungs- & Bergwertungs-Analyse öffnen"
+            >
+              <TrendingUp className="w-3.5 h-3.5" />
             </button>
           )}
 
@@ -180,6 +191,10 @@ interface SidebarProps {
   setIsMobileMenuOpen: (open: boolean) => void;
   estimatedSpeed: number;
   setEstimatedSpeed: (speed: number) => void;
+  selectedDate: string;
+  setSelectedDate: (date: string) => void;
+  selectedTime: string;
+  setSelectedTime: (time: string) => void;
   ftp: number;
   setFtp: (ftp: number) => void;
   userWeight: number;
@@ -188,6 +203,13 @@ interface SidebarProps {
   setUserAge: (age: number) => void;
   suggestedFtp: number | null;
   onOpenAnalytics: (id: string) => void;
+  onOpenClimbs: (id: string) => void;
+  textMarkers: TextMarker[];
+  onAddTextMarker: (marker: Omit<TextMarker, 'id'>) => void;
+  onDeleteTextMarker: (id: string) => void;
+  onUpdateTextMarker: (id: string, updates: Partial<TextMarker>) => void;
+  hoveredPoint: any;
+  onMapViewChange: (view: {lat: number, lng: number, zoom: number, pitch: number, bearing: number}) => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ 
@@ -211,6 +233,10 @@ const Sidebar: React.FC<SidebarProps> = ({
   setIsMobileMenuOpen,
   estimatedSpeed,
   setEstimatedSpeed,
+  selectedDate,
+  setSelectedDate,
+  selectedTime,
+  setSelectedTime,
   ftp,
   setFtp,
   userWeight,
@@ -218,7 +244,14 @@ const Sidebar: React.FC<SidebarProps> = ({
   userAge,
   setUserAge,
   suggestedFtp,
-  onOpenAnalytics
+  onOpenAnalytics,
+  onOpenClimbs,
+  textMarkers,
+  onAddTextMarker,
+  onDeleteTextMarker,
+  onUpdateTextMarker,
+  hoveredPoint,
+  onMapViewChange
 }) => {
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -412,6 +445,174 @@ const Sidebar: React.FC<SidebarProps> = ({
               </section>
             )}
 
+            <section className="space-y-3">
+              <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Startzeit & Datum</h2>
+              <div className="grid grid-cols-2 gap-2 bg-slate-50/50 dark:bg-slate-950/40 p-2.5 rounded-xl border border-slate-200/55 dark:border-slate-800/40">
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase">Datum</label>
+                  <input 
+                    type="date"
+                    value={selectedDate}
+                    onChange={(e) => setSelectedDate(e.target.value)}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-850 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/20 outline-none cursor-pointer"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[9px] font-bold text-slate-500 dark:text-slate-400 uppercase">Startzeit</label>
+                  <input 
+                    type="time"
+                    value={selectedTime}
+                    onChange={(e) => setSelectedTime(e.target.value)}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-150 dark:border-slate-850 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-blue-500/20 outline-none cursor-pointer"
+                  />
+                </div>
+              </div>
+              <p className="text-[10px] text-slate-400 font-medium">Beeinflusst die Wettervorhersage und die Zeitberechnung im Höhenprofil.</p>
+            </section>
+
+            <section className="space-y-3">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                  <MapPin className="text-blue-500 w-3.5 h-3.5" />
+                  Rennnotizen & Wegpunkte
+                </h2>
+                <span className="text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded-full">
+                  {textMarkers.length}
+                </span>
+              </div>
+              
+              {hoveredPoint ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    let dist: number | undefined = undefined;
+                    const track = tracks.find(t => t.id === markedTrackId);
+                    if (track) {
+                      let closestIdx = 0;
+                      let minDist = Infinity;
+                      for (let i = 0; i < track.points.length; i++) {
+                        const pt = track.points[i];
+                        const diff = Math.abs(pt.lat - hoveredPoint.lat) + Math.abs(pt.lng - hoveredPoint.lng);
+                        if (diff < minDist) {
+                          minDist = diff;
+                          closestIdx = i;
+                        }
+                      }
+                      let sum = 0;
+                      for (let i = 1; i <= closestIdx; i++) {
+                        sum += calculateDistance(track.points[i-1], track.points[i]);
+                      }
+                      dist = sum;
+                    }
+                    
+                    onAddTextMarker({
+                      lat: hoveredPoint.lat,
+                      lng: hoveredPoint.lng,
+                      label: dist ? `Notiz km ${dist.toFixed(1)}` : 'Wegpunkt',
+                      color: 'indigo',
+                      trackId: markedTrackId || undefined,
+                      distanceAlongTrack: dist
+                    });
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 bg-blue-50 hover:bg-blue-100 dark:bg-blue-950/40 dark:hover:bg-blue-900/40 border border-dashed border-blue-200 dark:border-blue-800/80 p-2 rounded-xl text-xs font-bold text-blue-600 dark:text-blue-400 transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Notiz an Zeigerposition erstellen</span>
+                </button>
+              ) : (
+                <div className="text-[11px] text-slate-400 dark:text-slate-500 font-medium bg-slate-50/50 dark:bg-slate-950/10 p-2.5 rounded-xl border border-slate-150 dark:border-slate-850/50 text-center">
+                  Bewege die Maus über die Karte/Notenprofil, um den Zeiger zu positionieren und hier Notizen zu erstellen.
+                </div>
+              )}
+
+              <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
+                {textMarkers.length === 0 ? (
+                  <div className="text-[10px] text-slate-400 dark:text-slate-550 italic text-center py-4 bg-slate-50/20 dark:bg-slate-950/10 rounded-xl border border-dashed border-slate-200/40">
+                    Noch keine Rennnotizen. Klicke auf die Karte oder den Höhenrücken, um Notizen und Wegmarken zu platzieren.
+                  </div>
+                ) : (
+                  textMarkers.map(marker => {
+                    const colors = [
+                      { name: 'indigo', hex: 'bg-indigo-500' },
+                      { name: 'emerald', hex: 'bg-emerald-500' },
+                      { name: 'rose', hex: 'bg-rose-500' },
+                      { name: 'amber', hex: 'bg-amber-500' },
+                      { name: 'slate', hex: 'bg-slate-500' }
+                    ];
+                    
+                    return (
+                      <div
+                        key={marker.id}
+                        className="group flex flex-col gap-1 p-2 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-850 rounded-xl hover:shadow-sm transition-all text-xs"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const currentIdx = colors.findIndex(c => c.name === marker.color);
+                              const nextIdx = (currentIdx + 1) % colors.length;
+                              onUpdateTextMarker(marker.id, { color: colors[nextIdx].name });
+                            }}
+                            className={`w-3.5 h-3.5 rounded-full shrink-0 border border-white dark:border-slate-750 shadow-sm cursor-pointer ${
+                              colors.find(c => c.name === marker.color)?.hex || 'bg-indigo-500'
+                            }`}
+                            title="Farbe wechseln"
+                          />
+                          
+                          <input
+                            type="text"
+                            value={marker.label}
+                            onChange={(e) => onUpdateTextMarker(marker.id, { label: e.target.value })}
+                            className="flex-1 font-bold text-slate-700 dark:text-slate-200 bg-transparent border-b border-transparent hover:border-slate-250 focus:border-blue-500 outline-none px-1 py-0.5"
+                            placeholder="Notiz eingeben..."
+                          />
+                          
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onMapViewChange({
+                                lat: marker.lat,
+                                lng: marker.lng,
+                                zoom: 14,
+                                pitch: 0,
+                                bearing: 0
+                              });
+                            }}
+                            className="p-1 text-slate-405 hover:text-blue-500 hover:bg-slate-50 dark:hover:bg-slate-800 rounded transition-colors"
+                            title="Auf Karte weisen"
+                          >
+                            <MapPin className="w-3.5 h-3.5" />
+                          </button>
+                          
+                          <button
+                            type="button"
+                            onClick={() => onDeleteTextMarker(marker.id)}
+                            className="p-1 text-slate-405 hover:text-red-500 hover:bg-slate-50 dark:hover:bg-slate-800 rounded transition-colors"
+                            title="Löschen"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                        
+                        <div className="flex items-center justify-between text-[10px] text-slate-500 dark:text-slate-400 font-medium pl-5 pr-1">
+                          <span>
+                            {marker.distanceAlongTrack !== undefined ? (
+                              <span className="text-blue-600 dark:text-blue-400 font-bold">km {marker.distanceAlongTrack.toFixed(2)}</span>
+                            ) : (
+                              <span className="text-slate-450">{marker.lat.toFixed(4)}, {marker.lng.toFixed(4)}</span>
+                            )}
+                          </span>
+                          <span className="text-slate-400 dark:text-slate-500 text-[9px] font-mono">
+                            GPS-Punkt
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+
             <section className="space-y-4">
               <div className="flex justify-between items-center">
                 <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Erweiterte Nutzerdaten</h2>
@@ -493,6 +694,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                           onRemoveTrack={onRemoveTrack} 
                           estimatedSpeed={estimatedSpeed}
                           onOpenAnalytics={onOpenAnalytics}
+                          onOpenClimbs={onOpenClimbs}
                         />
                       ))}
                     </div>
